@@ -136,9 +136,9 @@ router.post("/create-session", async (req, res) => {
         bonus_credits: pkg.bonus_credits || 0,
       },
       success_url:
-        "https://strip-me-8caq.vercel.app/credits?success=true&session_id={CHECKOUT_SESSION_ID}",
+        "https://strippals.com/credits?success=true&session_id={CHECKOUT_SESSION_ID}",
 
-      cancel_url: "https://strip-me-8caq.vercel.app/credits?canceled=true",
+      cancel_url: "https://strippals.com/credits?canceled=true",
     });
 
     res.json({ url: session.url });
