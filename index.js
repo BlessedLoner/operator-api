@@ -698,7 +698,7 @@ app.get("/operator/stats", async (req, res) => {
 // Get operator's current assigned message (for waiting room)
 app.get("/operator/current-message", async (req, res) => {
   try {
-    const { operator_id } = req.query;
+    const { operator_id, device_id } = req.query;
 
     if (!operator_id) {
       return res.status(400).json({ error: "Missing operator_id" });
@@ -797,6 +797,15 @@ app.get("/operator/current-message", async (req, res) => {
       if (msgError) {
         return res.status(500).json({ error: msgError.message });
       }
+
+      await supabase
+        .from("conversations")
+        .update({
+          active_operator_id: operator_id,
+          active_operator_device: device_id,
+          active_operator_at: new Date().toISOString(),
+        })
+        .eq("id", queueItem.conversation_id);
 
       return res.json({
         hasMessage: true,
@@ -1002,33 +1011,23 @@ app.post("/operator/assign-next", async (req, res) => {
 
       if (updateError) throw updateError;
 
-      // // Save active operator/device ownership
-      // const { data: conversationUpdate, error: conversationUpdateError } =
-      //   await supabase
-      //     .from("conversations")
-      //     .update({
-      //       active_operator_id: operator_id,
-      //       active_operator_device: device_id,
-      //       active_operator_at: new Date().toISOString(),
-      //     })
-      //     .eq("id", selectedMessage.conversation_id)
-      //     .select();
-
-      // console.log(
-      //   "Conversation ownership update:",
-      //   conversationUpdate,
-      //   conversationUpdateError,
-      // );
-
       // Save active operator/device ownership
-      await supabase
-        .from("conversations")
-        .update({
-          active_operator_id: operator_id,
-          active_operator_device: device_id,
-          active_operator_at: new Date().toISOString(),
-        })
-        .eq("id", selectedMessage.conversation_id);
+      const { data: conversationUpdate, error: conversationUpdateError } =
+        await supabase
+          .from("conversations")
+          .update({
+            active_operator_id: operator_id,
+            active_operator_device: device_id,
+            active_operator_at: new Date().toISOString(),
+          })
+          .eq("id", selectedMessage.conversation_id)
+          .select();
+
+      console.log(
+        "Conversation ownership update:",
+        conversationUpdate,
+        conversationUpdateError,
+      );
 
       // Mark any other pending messages from the SAME conversation as conversation_assigned
       await supabase
