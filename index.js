@@ -1186,6 +1186,7 @@ app.post("/operator/send-reply", async (req, res) => {
       content,
       operator_id,
       image_url,
+      device_id,
     } = req.body;
 
     console.log("📨 Send reply request:", {
@@ -1216,6 +1217,35 @@ app.post("/operator/send-reply", async (req, res) => {
       return res
         .status(400)
         .json({ error: "Message must be at least 20 characters" });
+    }
+
+    // Validate active device ownership
+    const { data: conversation, error: conversationError } = await supabase
+      .from("conversations")
+      .select("active_operator_id, active_operator_device")
+      .eq("id", conversation_id)
+      .single();
+
+    if (conversationError) {
+      console.error("❌ Ownership check error:", conversationError);
+
+      return res.status(500).json({
+        error: "Failed to validate conversation ownership",
+      });
+    }
+
+    // Prevent duplicate replies from another tab/device
+    if (
+      conversation.active_operator_id === operator_id &&
+      conversation.active_operator_device !== device_id
+    ) {
+      console.log("🚫 Duplicate device blocked");
+
+      return res.status(409).json({
+        error:
+          "This conversation is already active on another device/tab for this operator account.",
+        duplicate_device: true,
+      });
     }
 
     // ✅ Insert ONE message with both content and image_url
