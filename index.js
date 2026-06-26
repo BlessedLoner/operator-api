@@ -1002,23 +1002,33 @@ app.post("/operator/assign-next", async (req, res) => {
 
       if (updateError) throw updateError;
 
-      // Save active operator/device ownership
-      const { data: conversationUpdate, error: conversationUpdateError } =
-        await supabase
-          .from("conversations")
-          .update({
-            active_operator_id: operator_id,
-            active_operator_device: device_id,
-            active_operator_at: new Date().toISOString(),
-          })
-          .eq("id", selectedMessage.conversation_id)
-          .select();
+      // // Save active operator/device ownership
+      // const { data: conversationUpdate, error: conversationUpdateError } =
+      //   await supabase
+      //     .from("conversations")
+      //     .update({
+      //       active_operator_id: operator_id,
+      //       active_operator_device: device_id,
+      //       active_operator_at: new Date().toISOString(),
+      //     })
+      //     .eq("id", selectedMessage.conversation_id)
+      //     .select();
 
-      console.log(
-        "Conversation ownership update:",
-        conversationUpdate,
-        conversationUpdateError,
-      );
+      // console.log(
+      //   "Conversation ownership update:",
+      //   conversationUpdate,
+      //   conversationUpdateError,
+      // );
+
+      // Save active operator/device ownership
+      await supabase
+        .from("conversations")
+        .update({
+          active_operator_id: operator_id,
+          active_operator_device: device_id,
+          active_operator_at: new Date().toISOString(),
+        })
+        .eq("id", selectedMessage.conversation_id);
 
       // Mark any other pending messages from the SAME conversation as conversation_assigned
       await supabase
