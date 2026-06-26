@@ -829,6 +829,8 @@ app.post("/operator/assign-next", async (req, res) => {
   try {
     const { operator_id, device_id } = req.body;
 
+    console.log("ASSIGN NEXT DEVICE:", device_id);
+
     if (!operator_id) {
       return res.status(400).json({ error: "Missing operator_id" });
     }
