@@ -829,6 +829,7 @@ app.post("/operator/assign-next", async (req, res) => {
   try {
     const { operator_id, device_id } = req.body;
 
+    console.log("REQ BODY:", req.body);
     console.log("ASSIGN NEXT DEVICE:", device_id);
 
     if (!operator_id) {
