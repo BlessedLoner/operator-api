@@ -1338,23 +1338,6 @@ app.post("/operator/send-reply", async (req, res) => {
       console.error("❌ Queue completion error:", queueError);
     }
 
-    // ✅ Release conversation ownership after reply
-    const { error: releaseError } = await supabase
-      .from("conversations")
-      .update({
-        active_operator_id: null,
-        active_operator_device: null,
-        active_operator_at: null,
-      })
-      .eq("id", conversation_id);
-
-    if (releaseError) {
-      console.error(
-        "❌ Failed to release conversation ownership:",
-        releaseError,
-      );
-    }
-
     res.json({ success: true, message });
   } catch (err) {
     console.error("❌ Send reply error:", err);
