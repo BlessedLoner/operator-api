@@ -595,7 +595,15 @@ app.get("/operator/stats", async (req, res) => {
 
     // Reset time is 1am TODAY
     const todayReset = new Date(now);
+
+    // If current time is before 1AM,
+    // use PREVIOUS DAY 1AM as reset point
+    if (now.getHours() < 1) {
+      todayReset.setDate(todayReset.getDate() - 1);
+    }
+
     todayReset.setHours(1, 0, 0, 0);
+
     const resetTimeUTC = todayReset.toISOString();
 
     // Get today's message count for THIS SPECIFIC operator
@@ -603,7 +611,7 @@ app.get("/operator/stats", async (req, res) => {
       .from("messages")
       .select("*", { count: "exact", head: true })
       .eq("sender_type", "fictional")
-      .eq("credit_cost", 0)
+      .not("operator_id", "is", null)
       .eq("operator_id", operatorId) // ✅ FILTER BY OPERATOR
       .gte("created_at", resetTimeUTC);
 
@@ -616,7 +624,8 @@ app.get("/operator/stats", async (req, res) => {
       .from("messages")
       .select("*", { count: "exact", head: true })
       .eq("sender_type", "fictional")
-      .eq("credit_cost", 0)
+
+      .not("operator_id", "is", null)
       .eq("operator_id", operatorId) // ✅ FILTER BY OPERATOR
       .gte("created_at", currentMonthStart.toISOString());
 
@@ -632,7 +641,7 @@ app.get("/operator/stats", async (req, res) => {
       .from("messages")
       .select("*", { count: "exact", head: true })
       .eq("sender_type", "fictional")
-      .eq("credit_cost", 0)
+      .not("operator_id", "is", null)
       .eq("operator_id", operatorId) // ✅ FILTER BY OPERATOR
       .gte("created_at", lastMonthStart.toISOString())
       .lte("created_at", lastMonthEnd.toISOString());
@@ -653,7 +662,7 @@ app.get("/operator/stats", async (req, res) => {
         .from("messages")
         .select("*", { count: "exact", head: true })
         .eq("sender_type", "fictional")
-        .eq("credit_cost", 0)
+        .not("operator_id", "is", null)
         .eq("operator_id", operatorId) // ✅ FILTER BY OPERATOR
         .gte("created_at", dayStart.toISOString())
         .lte("created_at", dayEnd.toISOString());
@@ -671,7 +680,7 @@ app.get("/operator/stats", async (req, res) => {
       .from("messages")
       .select("*", { count: "exact", head: true })
       .eq("sender_type", "fictional")
-      .eq("credit_cost", 0)
+      .not("operator_id", "is", null)
       .eq("operator_id", operatorId); // ✅ FILTER BY OPERATOR
 
     if (processedError) throw processedError;
@@ -3020,6 +3029,8 @@ app.get("/manager/operator-stats", async (req, res) => {
         )
       `,
       )
+      .eq("sender_type", "fictional")
+      .not("operator_id", "is", null)
       .eq("operator_id", operator_id);
 
     if (startDate) {
@@ -3039,12 +3050,18 @@ app.get("/manager/operator-stats", async (req, res) => {
 
     // Calculate stats
     const now = new Date();
-    const today = now.toISOString().split("T")[0];
+    const todayReset = new Date(now);
+
+    if (now.getHours() < 1) {
+      todayReset.setDate(todayReset.getDate() - 1);
+    }
+
+    todayReset.setHours(1, 0, 0, 0);
     const weekAgo = new Date(now.setDate(now.getDate() - 7)).toISOString();
     const monthAgo = new Date(now.setMonth(now.getMonth() - 1)).toISOString();
 
     const daily =
-      messages?.filter((m) => m.created_at.split("T")[0] === today).length || 0;
+      messages?.filter((m) => new Date(m.created_at) >= todayReset).length || 0;
     const weekly = messages?.filter((m) => m.created_at >= weekAgo).length || 0;
     const monthly =
       messages?.filter((m) => m.created_at >= monthAgo).length || 0;
@@ -3069,6 +3086,7 @@ app.get("/manager/operator-stats", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 // Manager login
 app.post("/manager/login", async (req, res) => {
   try {
