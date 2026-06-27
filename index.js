@@ -770,6 +770,7 @@ app.get("/operator/current-message", async (req, res) => {
           fictional_profiles (
             id,
             display_name,
+            name,
             age,
             bio,
             about,
@@ -796,6 +797,16 @@ app.get("/operator/current-message", async (req, res) => {
     }
 
     if (queueItem) {
+      // Refresh ownership for current active queue
+      await supabase
+        .from("conversations")
+        .update({
+          active_operator_id: operator_id,
+          active_operator_device: req.query.device_id,
+          active_operator_at: new Date().toISOString(),
+        })
+        .eq("id", queueItem.conversation_id);
+
       // Get the actual message content
       const { data: message, error: msgError } = await supabase
         .from("messages")
