@@ -231,22 +231,33 @@ app.get("/shuffle-profiles", async (req, res) => {
 
     if (error) throw error;
 
-    const updates = profiles.map((profile) => ({
-      id: profile.id,
-      shuffle_order: Math.floor(Math.random() * 1000000),
-    }));
+    for (const profile of profiles) {
+      const randomOrder = Math.floor(Math.random() * 1000000);
 
-    const { error: updateError } = await supabase
-      .from("fictional_profiles")
-      .upsert(updates);
+      const { error: updateError } = await supabase
+        .from("fictional_profiles")
+        .update({
+          shuffle_order: randomOrder,
+        })
+        .eq("id", profile.id);
 
-    if (updateError) throw updateError;
+      if (updateError) {
+        console.error(`❌ Failed updating profile ${profile.id}:`, updateError);
+      }
+    }
+
     console.log("✅ Profiles shuffled successfully");
 
-    res.json({ success: true });
+    res.json({
+      success: true,
+      shuffled: profiles.length,
+    });
   } catch (err) {
-    console.error("Error shuffling profiles:", err);
-    res.status(500).json({ error: err.message });
+    console.error("❌ Shuffle error:", err);
+
+    res.status(500).json({
+      error: err.message,
+    });
   }
 });
 
