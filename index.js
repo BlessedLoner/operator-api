@@ -221,6 +221,35 @@ app.post("/user/send-message", async (req, res) => {
   }
 });
 
+app.get("/shuffle-profiles", async (req, res) => {
+  try {
+    console.log("🔀 Starting profile shuffle...");
+
+    const { data: profiles, error } = await supabase
+      .from("fictional_profiles")
+      .select("id");
+
+    if (error) throw error;
+
+    const updates = profiles.map((profile) => ({
+      id: profile.id,
+      shuffle_order: Math.floor(Math.random() * 1000000),
+    }));
+
+    const { error: updateError } = await supabase
+      .from("fictional_profiles")
+      .upsert(updates);
+
+    if (updateError) throw updateError;
+    console.log("✅ Profiles shuffled successfully");
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error shuffling profiles:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==========================
 // OPERATOR ROUTES
 // ==========================
