@@ -411,8 +411,8 @@ app.post("/operator/next-conversation", async (req, res) => {
     }
 
     const selectedMessage = pendingMessages[0];
-    const expiresAt = new Date();
-    expiresAt.setMinutes(expiresAt.getMinutes() + 5);
+
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
     const { data: updated, error: updateError } = await supabase
       .from("message_queue")
