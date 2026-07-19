@@ -745,6 +745,7 @@ app.get("/operator/stats", async (req, res) => {
 // ==========================
 
 // Get operator's current assigned message (for waiting room)
+// Get operator's current assigned message (for waiting room)
 app.get("/operator/current-message", async (req, res) => {
   try {
     const { operator_id, device_id } = req.query;
@@ -773,6 +774,24 @@ app.get("/operator/current-message", async (req, res) => {
       console.log(
         `🔄 Released ${expiredAssignments.length} expired assignments for operator ${operator_id}`,
       );
+
+      // 🔥 CRITICAL FIX: Clear conversation ownership for expired assignments
+      const conversationIds = expiredAssignments
+        .map((m) => m.conversation_id)
+        .filter(Boolean);
+      if (conversationIds.length > 0) {
+        await supabase
+          .from("conversations")
+          .update({
+            active_operator_id: null,
+            active_operator_device: null,
+            active_operator_at: null,
+          })
+          .in("id", conversationIds);
+        console.log(
+          `✅ Cleared ownership for ${conversationIds.length} expired conversations`,
+        );
+      }
     }
 
     // Update operator session
@@ -1406,6 +1425,7 @@ app.post("/operator/send-reply", async (req, res) => {
 });
 
 // Release a message back to the queue (when operator stops chatting or logs out)
+// Release a message back to the queue (when operator stops chatting or logs out)
 app.post("/operator/release-message", async (req, res) => {
   try {
     const { queue_id, operator_id } = req.body;
@@ -1417,9 +1437,10 @@ app.post("/operator/release-message", async (req, res) => {
     console.log(`🔄 Releasing message ${queue_id} back to queue`);
 
     let released = false;
+    let conversationId = null;
 
     // Try regular queue
-    const { data: regularRows } = await supabase
+    const { data: regularRows, error: regularError } = await supabase
       .from("message_queue")
       .update({
         status: "pending",
@@ -1432,13 +1453,17 @@ app.post("/operator/release-message", async (req, res) => {
       .eq("status", "assigned")
       .select();
 
+    if (regularError) throw regularError;
+
     if (regularRows?.length) {
       released = true;
+      conversationId = regularRows[0].conversation_id;
+      console.log(`✅ Released regular queue item ${queue_id}`);
     }
 
     // Try stopped queue
     if (!released) {
-      const { data: stoppedRows } = await supabase
+      const { data: stoppedRows, error: stoppedError } = await supabase
         .from("stopped_queue")
         .update({
           status: "pending",
@@ -1450,16 +1475,54 @@ app.post("/operator/release-message", async (req, res) => {
         .eq("status", "assigned")
         .select();
 
+      if (stoppedError) throw stoppedError;
+
       if (stoppedRows?.length) {
         released = true;
+        conversationId = stoppedRows[0].conversation_id;
+        console.log(`✅ Released stopped queue item ${queue_id}`);
       }
     }
-    if (error) throw error;
 
-    if (released) {
-      console.log(`✅ Released queue item ${queue_id}`);
-    } else {
-      console.log(`⚠️ Queue item not found or already released`);
+    // Try poke queue
+    if (!released) {
+      const { data: pokeRows, error: pokeError } = await supabase
+        .from("poke_queue")
+        .update({
+          status: "pending",
+          assigned_poker_id: null,
+          assigned_at: null,
+          expires_at: null,
+        })
+        .eq("id", queue_id)
+        .eq("status", "assigned")
+        .select();
+
+      if (pokeError) throw pokeError;
+
+      if (pokeRows?.length) {
+        released = true;
+        // Poke queue doesn't have conversation_id, but we can get it from the user
+        console.log(`✅ Released poke queue item ${queue_id}`);
+      }
+    }
+
+    // 🔥 CRITICAL FIX: Clear conversation ownership if we have a conversationId
+    if (released && conversationId) {
+      const { error: convError } = await supabase
+        .from("conversations")
+        .update({
+          active_operator_id: null,
+          active_operator_device: null,
+          active_operator_at: null,
+        })
+        .eq("id", conversationId);
+
+      if (convError) {
+        console.error("❌ Failed to clear conversation ownership:", convError);
+      } else {
+        console.log(`✅ Cleared conversation ownership for ${conversationId}`);
+      }
     }
 
     // Also clean up operator session if needed
@@ -1473,13 +1536,16 @@ app.post("/operator/release-message", async (req, res) => {
         .eq("operator_id", operator_id);
     }
 
+    if (!released) {
+      console.log(`⚠️ Queue item ${queue_id} not found or already released`);
+    }
+
     res.json({ success: true, message: "Message released back to queue" });
   } catch (err) {
     console.error("Release message error:", err);
     res.status(500).json({ error: err.message });
   }
 });
-
 // ==========================
 // LOGBOOK & PRIVATE PHOTOS ENDPOINTS
 // ==========================
@@ -3732,6 +3798,7 @@ const cleanupExpiredAssignments = async () => {
         assigned_operator_id: null,
         assigned_at: null,
         expires_at: null,
+        conversation_assigned: false,
       })
       .eq("status", "assigned")
       .lt("expires_at", new Date().toISOString())
@@ -3741,6 +3808,33 @@ const cleanupExpiredAssignments = async () => {
       console.log(
         `🧹 Cleaned up ${expiredMessages.length} expired message assignments`,
       );
+
+      // 🔥 CRITICAL FIX: Clear conversation ownership for expired messages
+      const conversationIds = expiredMessages
+        .map((m) => m.conversation_id)
+        .filter(Boolean);
+
+      if (conversationIds.length > 0) {
+        const { error: convError } = await supabase
+          .from("conversations")
+          .update({
+            active_operator_id: null,
+            active_operator_device: null,
+            active_operator_at: null,
+          })
+          .in("id", conversationIds);
+
+        if (convError) {
+          console.error(
+            "❌ Failed to clear conversation ownership for expired messages:",
+            convError,
+          );
+        } else {
+          console.log(
+            `✅ Cleared ownership for ${conversationIds.length} expired conversations`,
+          );
+        }
+      }
     }
 
     // Clean up expired poke_queue assignments
@@ -3779,6 +3873,22 @@ const cleanupExpiredAssignments = async () => {
       console.log(
         `🧹 Cleaned up ${expiredStopped.length} expired stopped assignments`,
       );
+
+      // Clear conversation ownership for stopped conversations too
+      const conversationIds = expiredStopped
+        .map((m) => m.conversation_id)
+        .filter(Boolean);
+
+      if (conversationIds.length > 0) {
+        await supabase
+          .from("conversations")
+          .update({
+            active_operator_id: null,
+            active_operator_device: null,
+            active_operator_at: null,
+          })
+          .in("id", conversationIds);
+      }
     }
 
     // Clean up orphaned records (assigned but no operator_id)
@@ -3799,6 +3909,21 @@ const cleanupExpiredAssignments = async () => {
       console.log(
         `🧹 Cleaned up ${orphanedMessages.length} orphaned message assignments`,
       );
+
+      // Also clear conversation ownership for orphaned messages
+      const convIds = orphanedMessages
+        .map((m) => m.conversation_id)
+        .filter(Boolean);
+      if (convIds.length > 0) {
+        await supabase
+          .from("conversations")
+          .update({
+            active_operator_id: null,
+            active_operator_device: null,
+            active_operator_at: null,
+          })
+          .in("id", convIds);
+      }
     }
   } catch (err) {
     console.error("Cleanup error:", err);
@@ -3807,6 +3932,180 @@ const cleanupExpiredAssignments = async () => {
 
 // Run cleanup every minute
 setInterval(cleanupExpiredAssignments, 60 * 1000);
+
+// ==========================
+// HEARTBEAT MONITORING
+// ==========================
+
+// Endpoint for operators to send heartbeat
+app.post("/operator/heartbeat", async (req, res) => {
+  try {
+    const { operator_id, device_id, queue_id } = req.body;
+
+    if (!operator_id) {
+      return res.status(400).json({
+        error: "operator_id required",
+      });
+    }
+
+    // Update operator's last seen
+    await supabase
+      .from("operator_accounts")
+      .update({
+        last_seen_at: new Date().toISOString(),
+      })
+      .eq("id", operator_id);
+
+    // Update or create operator session
+    await supabase.from("operator_sessions").upsert(
+      {
+        operator_id: operator_id,
+        device_id: device_id || null,
+        status: "online",
+        current_queue_id: queue_id || null,
+        last_heartbeat: new Date().toISOString(),
+      },
+      {
+        onConflict: "operator_id",
+      },
+    );
+
+    res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("Heartbeat error:", err);
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
+
+// Heartbeat cleanup - runs every 2 minutes to check for stale operators
+const cleanupStaleOperators = async () => {
+  try {
+    const staleThreshold = new Date();
+    staleThreshold.setMinutes(staleThreshold.getMinutes() - 2); // 2 minutes without heartbeat
+
+    // Find stale sessions
+    const { data: staleSessions, error: sessionError } = await supabase
+      .from("operator_sessions")
+      .select("operator_id, current_queue_id")
+      .lt("last_heartbeat", staleThreshold.toISOString())
+      .eq("status", "online");
+
+    if (sessionError) {
+      console.error("❌ Failed to fetch stale sessions:", sessionError);
+      return;
+    }
+
+    if (!staleSessions || staleSessions.length === 0) {
+      return;
+    }
+
+    console.log(`🔍 Found ${staleSessions.length} stale operator sessions`);
+
+    for (const session of staleSessions) {
+      // Mark operator as offline
+      await supabase
+        .from("operator_sessions")
+        .update({
+          status: "offline",
+        })
+        .eq("operator_id", session.operator_id);
+
+      // If they had an active queue item, release it
+      if (session.current_queue_id) {
+        console.log(
+          `🔄 Releasing queue ${session.current_queue_id} due to stale heartbeat`,
+        );
+
+        // Try regular queue
+        const { data: regularRows } = await supabase
+          .from("message_queue")
+          .update({
+            status: "pending",
+            assigned_operator_id: null,
+            assigned_at: null,
+            expires_at: null,
+            conversation_assigned: false,
+          })
+          .eq("id", session.current_queue_id)
+          .eq("status", "assigned")
+          .select();
+
+        // If released, clear conversation ownership
+        if (regularRows?.length > 0) {
+          const conversationId = regularRows[0].conversation_id;
+          if (conversationId) {
+            await supabase
+              .from("conversations")
+              .update({
+                active_operator_id: null,
+                active_operator_device: null,
+                active_operator_at: null,
+              })
+              .eq("id", conversationId);
+            console.log(
+              `✅ Released and cleared ownership for conversation ${conversationId}`,
+            );
+          }
+        }
+
+        // Try stopped queue
+        const { data: stoppedRows } = await supabase
+          .from("stopped_queue")
+          .update({
+            status: "pending",
+            assigned_operator_id: null,
+            assigned_at: null,
+            expires_at: null,
+          })
+          .eq("id", session.current_queue_id)
+          .eq("status", "assigned")
+          .select();
+
+        if (stoppedRows?.length > 0) {
+          const conversationId = stoppedRows[0].conversation_id;
+          if (conversationId) {
+            await supabase
+              .from("conversations")
+              .update({
+                active_operator_id: null,
+                active_operator_device: null,
+                active_operator_at: null,
+              })
+              .eq("id", conversationId);
+          }
+        }
+
+        // Try poke queue
+        await supabase
+          .from("poke_queue")
+          .update({
+            status: "pending",
+            assigned_poker_id: null,
+            assigned_at: null,
+            expires_at: null,
+          })
+          .eq("id", session.current_queue_id)
+          .eq("status", "assigned");
+      }
+    }
+
+    if (staleSessions.length > 0) {
+      console.log(
+        `✅ Released ${staleSessions.length} stale operator assignments`,
+      );
+    }
+  } catch (err) {
+    console.error("Stale operator cleanup error:", err);
+  }
+};
+
+// Run stale operator cleanup every 2 minutes
+setInterval(cleanupStaleOperators, 2 * 60 * 1000);
 
 app.listen(PORT, () => {
   console.log(`✅ Operator API running on port ${PORT}`);
