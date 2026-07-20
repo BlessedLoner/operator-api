@@ -3890,14 +3890,23 @@ app.get("/manager/queue-stats", async (req, res) => {
 
     if (assignedError) throw assignedError;
 
-    // 3. Get active operators count (heartbeat within last 2 minutes)
-    const { count: activeOperators, error: activeError } = await supabase
+    // 3. ✅ FIXED: Get UNIQUE active operators (not sessions)
+    const { data: activeSessions, error: activeError } = await supabase
       .from("operator_sessions")
-      .select("operator_id", { count: "exact", head: true })
+      .select("operator_id")
       .eq("status", "online")
       .gte("last_heartbeat", staleThreshold.toISOString());
 
     if (activeError) throw activeError;
+
+    // Count unique operators (not sessions)
+    const uniqueOperators = new Set();
+    activeSessions?.forEach((session) => {
+      if (session.operator_id) {
+        uniqueOperators.add(session.operator_id);
+      }
+    });
+    const activeOperators = uniqueOperators.size;
 
     // 4. Get pending messages by country
     const { data: pendingByCountry, error: countryError } = await supabase
@@ -3976,11 +3985,11 @@ app.get("/manager/queue-stats", async (req, res) => {
       stats: {
         pendingConversations: pendingConversations || 0,
         assignedMessages: assignedMessages || 0,
-        activeOperators: activeOperators || 0,
+        activeOperators: activeOperators || 0, // ✅ Now counting unique operators
         totalOperators: totalOperators || 0,
         countries: countries,
         recentActivity: activity,
-        threshold: 15, // Alert threshold
+        threshold: 15,
         updatedAt: new Date().toISOString(),
       },
     });
