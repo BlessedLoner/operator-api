@@ -3862,6 +3862,135 @@ app.get("/manager/messages", async (req, res) => {
 });
 
 // ==========================
+// QUEUE DASHBOARD STATS
+// ==========================
+
+// Get queue statistics for the manager dashboard
+app.get("/manager/queue-stats", async (req, res) => {
+  try {
+    const now = new Date().toISOString();
+    const staleThreshold = new Date();
+    staleThreshold.setMinutes(staleThreshold.getMinutes() - 2);
+
+    // 1. Get pending messages count (unique conversations waiting)
+    const { count: pendingConversations, error: pendingError } = await supabase
+      .from("message_queue")
+      .select("conversation_id", { count: "exact", head: true })
+      .eq("status", "pending")
+      .eq("conversation_assigned", false);
+
+    if (pendingError) throw pendingError;
+
+    // 2. Get assigned messages count
+    const { count: assignedMessages, error: assignedError } = await supabase
+      .from("message_queue")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "assigned")
+      .gte("expires_at", now);
+
+    if (assignedError) throw assignedError;
+
+    // 3. Get active operators count (heartbeat within last 2 minutes)
+    const { count: activeOperators, error: activeError } = await supabase
+      .from("operator_sessions")
+      .select("operator_id", { count: "exact", head: true })
+      .eq("status", "online")
+      .gte("last_heartbeat", staleThreshold.toISOString());
+
+    if (activeError) throw activeError;
+
+    // 4. Get pending messages by country
+    const { data: pendingByCountry, error: countryError } = await supabase
+      .from("message_queue")
+      .select(
+        `
+        conversation_id,
+        conversations!inner (
+          user_profiles!conversations_user_id_fkey (
+            country
+          )
+        )
+      `,
+      )
+      .eq("status", "pending")
+      .eq("conversation_assigned", false);
+
+    if (countryError) throw countryError;
+
+    // Count pending messages by country
+    const countryCounts = {};
+    pendingByCountry?.forEach((item) => {
+      const country = item.conversations?.user_profiles?.country || "Unknown";
+      countryCounts[country] = (countryCounts[country] || 0) + 1;
+    });
+
+    // Format country data for display
+    const countries = Object.keys(countryCounts).map((code) => ({
+      code: code,
+      count: countryCounts[code],
+    }));
+
+    // 5. Get total operators (for reference)
+    const { count: totalOperators, error: totalError } = await supabase
+      .from("operator_accounts")
+      .select("id", { count: "exact", head: true })
+      .eq("is_active", true);
+
+    if (totalError) throw totalError;
+
+    // 6. Get recent queue items (last 5 for activity feed)
+    const { data: recentActivity, error: recentError } = await supabase
+      .from("message_queue")
+      .select(
+        `
+        id,
+        status,
+        created_at,
+        assigned_operator_id,
+        conversations!inner (
+          user_profiles!conversations_user_id_fkey (
+            display_name,
+            country
+          )
+        )
+      `,
+      )
+      .order("created_at", { ascending: false })
+      .limit(5);
+
+    if (recentError) throw recentError;
+
+    // Format recent activity
+    const activity =
+      recentActivity?.map((item) => ({
+        id: item.id,
+        status: item.status,
+        created_at: item.created_at,
+        user_name: item.conversations?.user_profiles?.display_name || "Unknown",
+        country: item.conversations?.user_profiles?.country || "Unknown",
+        assigned_operator_id: item.assigned_operator_id,
+      })) || [];
+
+    res.json({
+      success: true,
+      stats: {
+        pendingConversations: pendingConversations || 0,
+        assignedMessages: assignedMessages || 0,
+        activeOperators: activeOperators || 0,
+        totalOperators: totalOperators || 0,
+        countries: countries,
+        recentActivity: activity,
+        threshold: 15, // Alert threshold
+        updatedAt: new Date().toISOString(),
+      },
+    });
+  } catch (err) {
+    console.error("❌ Queue stats error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================
 // STRIPE ROUTES
 // ==========================
 app.use("/payments", paymentsRouter);
