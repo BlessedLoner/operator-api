@@ -1099,7 +1099,7 @@ app.post("/operator/assign-next", async (req, res) => {
           .from("conversations")
           .update({
             active_operator_id: operator_id,
-            active_operator_device: device_id,
+            active_operator_device: device_id || null,
             active_operator_at: new Date().toISOString(),
           })
           .eq("id", selectedMessage.conversation_id)
@@ -1310,34 +1310,69 @@ app.post("/operator/send-reply", async (req, res) => {
         .json({ error: "Message must be at least 20 characters" });
     }
 
-    // Validate active device ownership
+    // ✅ STEP 1: Get conversation details
     const { data: conversation, error: conversationError } = await supabase
       .from("conversations")
-      .select("active_operator_id, active_operator_device")
+      .select("active_operator_id, active_operator_device, active_operator_at")
       .eq("id", conversation_id)
       .single();
 
     if (conversationError) {
       console.error("❌ Ownership check error:", conversationError);
-
       return res.status(500).json({
         error: "Failed to validate conversation ownership",
       });
     }
 
-    // Prevent duplicate replies from another tab/device
+    // ✅ STEP 2: Check if the operator actually has an active assignment
+    const { data: activeQueue, error: queueCheckError } = await supabase
+      .from("message_queue")
+      .select("id, expires_at")
+      .eq("conversation_id", conversation_id)
+      .eq("assigned_operator_id", operator_id)
+      .eq("status", "assigned")
+      .gte("expires_at", new Date().toISOString())
+      .maybeSingle();
+
+    // If no active queue assignment, release ownership and allow
+    if (!activeQueue) {
+      console.log("⚠️ No active queue assignment found, releasing ownership");
+      await supabase
+        .from("conversations")
+        .update({
+          active_operator_id: null,
+          active_operator_device: null,
+          active_operator_at: null,
+        })
+        .eq("id", conversation_id);
+
+      // ✅ Continue to allow reply (don't return)
+    }
+
+    // ✅ STEP 3: Device validation - ONLY check if there's an active queue AND device is set
     if (
+      activeQueue && // ✅ Only check if there's an active assignment
       conversation.active_operator_id === operator_id &&
+      conversation.active_operator_device !== null && // ✅ Only check if device is set
       conversation.active_operator_device !== device_id
     ) {
-      console.log("🚫 Duplicate device blocked");
+      console.log("🚫 Duplicate device blocked:", {
+        activeDevice: conversation.active_operator_device,
+        currentDevice: device_id,
+        operator: operator_id,
+        queueId: activeQueue.id,
+      });
 
       return res.status(409).json({
         error:
           "This conversation is already active on another device/tab for this operator account.",
         duplicate_device: true,
+        active_device: conversation.active_operator_device,
       });
     }
+
+    // ✅ If we got here, the operator can send the reply
+    console.log("✅ Device validation passed, proceeding with reply");
 
     // ✅ Insert ONE message with both content and image_url
     const { data: message, error: insertError } = await supabase
@@ -1364,7 +1399,6 @@ app.post("/operator/send-reply", async (req, res) => {
 
     // If this was a photo from fictional_private_photos, log it
     if (image_url) {
-      // Find which photo was sent (if from fictional_private_photos)
       const { data: photo } = await supabase
         .from("fictional_private_photos")
         .select("id")
@@ -1546,6 +1580,58 @@ app.post("/operator/release-message", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// New endpoint: Force clear conversation lock (for recovery)
+app.post("/operator/force-clear-lock", async (req, res) => {
+  try {
+    const { conversation_id, operator_id } = req.body;
+
+    if (!conversation_id) {
+      return res.status(400).json({ error: "Missing conversation_id" });
+    }
+
+    // Verify the operator has access to this conversation
+    const { data: queueItem } = await supabase
+      .from("message_queue")
+      .select("id")
+      .eq("conversation_id", conversation_id)
+      .eq("assigned_operator_id", operator_id)
+      .eq("status", "assigned")
+      .maybeSingle();
+
+    if (!queueItem) {
+      return res.status(403).json({ error: "Not authorized" });
+    }
+
+    // Release the queue item
+    await supabase
+      .from("message_queue")
+      .update({
+        status: "pending",
+        assigned_operator_id: null,
+        assigned_at: null,
+        expires_at: null,
+        conversation_assigned: false,
+      })
+      .eq("id", queueItem.id);
+
+    // Clear conversation ownership
+    await supabase
+      .from("conversations")
+      .update({
+        active_operator_id: null,
+        active_operator_device: null,
+        active_operator_at: null,
+      })
+      .eq("id", conversation_id);
+
+    res.json({ success: true, message: "Lock cleared successfully" });
+  } catch (err) {
+    console.error("Force clear lock error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==========================
 // LOGBOOK & PRIVATE PHOTOS ENDPOINTS
 // ==========================
