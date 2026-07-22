@@ -54,7 +54,6 @@ const requireAdmin = async (req, res, next) => {
 // ==========================
 // USER ROUTES
 // ==========================
-// User sends a message - using message_queue
 app.post("/user/send-message", async (req, res) => {
   try {
     const { conversation_id, user_id, content, image_url } = req.body;
@@ -70,6 +69,15 @@ app.post("/user/send-message", async (req, res) => {
 
     let isNewAssignment = false;
     let assignedOperatorId = null;
+
+    // Helper function to mark conversation as read for the user
+    const markConversationAsRead = async (convId, userId) => {
+      await supabase.from("conversation_reads").upsert({
+        conversation_id: convId,
+        user_id: userId,
+        last_read_at: new Date().toISOString(),
+      });
+    };
 
     if (existingAssignment) {
       // ✅ Conversation already assigned to an operator - just add message, NO new queue item
@@ -105,6 +113,9 @@ app.post("/user/send-message", async (req, res) => {
           last_message_preview: content?.substring(0, 50) || "[Image]",
         })
         .eq("id", conversation_id);
+
+      // ✅ FIX: Mark conversation as read for the user (they just sent a message)
+      await markConversationAsRead(conversation_id, user_id);
 
       // Also refresh the expires_at to give more time
       const newExpiresAt = new Date();
@@ -169,6 +180,9 @@ app.post("/user/send-message", async (req, res) => {
         last_message_preview: content?.substring(0, 50) || "[Image]",
       })
       .eq("id", conversation_id);
+
+    // ✅ FIX: Mark conversation as read for the user (they just sent a message)
+    await markConversationAsRead(conversation_id, user_id);
 
     // ACTIVE QUEUE EXISTS
     if (activeQueue) {
