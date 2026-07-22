@@ -2217,6 +2217,7 @@ app.get("/poker/next-user", async (req, res) => {
 });
 
 // Send flirt message from poker
+// Send flirt message from poker
 app.post("/poker/send-flirt", async (req, res) => {
   try {
     const {
@@ -2237,30 +2238,46 @@ app.post("/poker/send-flirt", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
+    // ✅ Use service role client to bypass RLS
+    // supabase is already initialized with SERVICE_ROLE_KEY at the top of your index.js
+
     // Check if conversation already exists
     let conversationId;
-    const { data: existingConv } = await supabase
+    const { data: existingConv, error: existingError } = await supabase
       .from("conversations")
       .select("id")
       .eq("user_id", user_profile_id)
       .eq("fictional_profile_id", fictional_profile_id)
       .maybeSingle();
 
+    if (existingError && existingError.code !== "PGRST116") {
+      // PGRST116 = not found, that's fine
+      throw existingError;
+    }
+
     if (existingConv) {
       conversationId = existingConv.id;
+      console.log(`✅ Using existing conversation: ${conversationId}`);
     } else {
+      // ✅ INSERT new conversation (bypass RLS with service role)
       const { data: newConv, error: convError } = await supabase
         .from("conversations")
         .insert({
           user_id: user_profile_id,
           fictional_profile_id: fictional_profile_id,
           started_by_flirt: true,
+          created_at: new Date().toISOString(),
         })
         .select()
         .single();
 
-      if (convError) throw convError;
+      if (convError) {
+        console.error("❌ Conversation creation error:", convError);
+        throw convError;
+      }
+
       conversationId = newConv.id;
+      console.log(`✅ Created new conversation: ${conversationId}`);
     }
 
     // Insert flirt message
@@ -2275,31 +2292,53 @@ app.post("/poker/send-flirt", async (req, res) => {
         credit_cost: 0,
         operator_id: operator_id,
         is_flirt: true,
+        created_at: new Date().toISOString(),
       })
       .select()
       .single();
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      console.error("❌ Message insert error:", insertError);
+      throw insertError;
+    }
 
-    // Update conversation
+    console.log(`✅ Flirt message inserted: ${message.id}`);
+
+    // Update conversation last message
     await supabase
       .from("conversations")
       .update({
         last_message_at: message.created_at,
         last_message_sender_id: fictional_profile_id,
         last_message_preview: content.substring(0, 50),
+        last_message_sender_type: "fictional",
       })
       .eq("id", conversationId);
 
+    // ✅ Mark conversation as read for the user
+    // This ensures the user sees the message as unread (since it's new)
+    // Wait - actually for a flirt message, we want it to show as UNREAD for the user
+    // So we DON'T mark it as read for the user (they haven't seen it yet)
+
     // Mark queue as completed
-    await supabase
+    const { error: queueError } = await supabase
       .from("poke_queue")
       .update({ status: "completed" })
       .eq("id", queue_id);
 
-    res.json({ success: true, message, conversationId });
+    if (queueError) {
+      console.error("❌ Queue update error:", queueError);
+      // Don't throw, just log - the message was sent successfully
+    }
+
+    res.json({
+      success: true,
+      message,
+      conversationId,
+      is_new_conversation: !existingConv,
+    });
   } catch (err) {
-    console.error("Send flirt error:", err);
+    console.error("❌ Send flirt error:", err);
     res.status(500).json({ error: err.message });
   }
 });
