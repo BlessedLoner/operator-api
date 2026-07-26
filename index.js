@@ -1785,7 +1785,12 @@ app.get("/operator/user-logbook/:conversationId", async (req, res) => {
     const logbookMap = {};
 
     data?.forEach((item) => {
-      logbookMap[item.category] = item.value;
+      logbookMap[item.category] = {
+        value: item.value,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+        operator_id: item.operator_id,
+      };
     });
 
     res.json(logbookMap);
@@ -1849,7 +1854,12 @@ app.get("/operator/fictional-logbook/:conversationId", async (req, res) => {
     const logbookMap = {};
 
     data?.forEach((item) => {
-      logbookMap[item.category] = item.value;
+      logbookMap[item.category] = {
+        value: item.value,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+        operator_id: item.operator_id,
+      };
     });
 
     res.json(logbookMap);
