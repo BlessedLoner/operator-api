@@ -1798,21 +1798,30 @@ app.get("/operator/user-logbook/:conversationId", async (req, res) => {
 // Save user logbook entry
 app.post("/operator/user-logbook", async (req, res) => {
   try {
-    const { user_profile_id, category, value, operator_id } = req.body;
+    const { conversation_id, user_profile_id, category, value, operator_id } =
+      req.body;
 
-    if (!user_profile_id || !category || !operator_id) {
-      return res.status(400).json({ error: "Missing required fields" });
+    if (!conversation_id || !category || !operator_id) {
+      return res.status(400).json({
+        error: "Missing required fields",
+      });
     }
 
     const { data, error } = await supabase
       .from("user_logbook")
-      .upsert({
-        user_profile_id,
-        category,
-        value: value || null,
-        operator_id,
-        updated_at: new Date().toISOString(),
-      })
+      .upsert(
+        {
+          conversation_id,
+          user_profile_id,
+          category,
+          value: value || null,
+          operator_id,
+          updated_at: new Date().toISOString(),
+        },
+        {
+          onConflict: "conversation_id,category",
+        },
+      )
       .select()
       .single();
 
@@ -1853,21 +1862,33 @@ app.get("/operator/fictional-logbook/:conversationId", async (req, res) => {
 // Save fictional logbook entry
 app.post("/operator/fictional-logbook", async (req, res) => {
   try {
-    const { fictional_profile_id, category, value, operator_id } = req.body;
+    const {
+      conversation_id,
+      fictional_profile_id,
+      category,
+      value,
+      operator_id,
+    } = req.body;
 
-    if (!fictional_profile_id || !category || !operator_id) {
+    if (!conversation_id || !category || !operator_id) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
     const { data, error } = await supabase
       .from("fictional_logbook")
-      .upsert({
-        fictional_profile_id,
-        category,
-        value: value || null,
-        operator_id,
-        updated_at: new Date().toISOString(),
-      })
+      .upsert(
+        {
+          conversation_id,
+          fictional_profile_id,
+          category,
+          value: value || null,
+          operator_id,
+          updated_at: new Date().toISOString(),
+        },
+        {
+          onConflict: "conversation_id,category",
+        },
+      )
       .select()
       .single();
 
