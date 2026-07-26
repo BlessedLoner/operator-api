@@ -2477,13 +2477,18 @@ app.post("/stopped/send-message", async (req, res) => {
     // Mark queue item as completed
     const { error: completeError } = await supabase
       .from("stopped_queue")
-      .update({
-        status: "completed",
-        assigned_operator_id: null,
-        assigned_at: null,
-        expires_at: null,
-      })
+      .delete()
       .eq("id", queue_id);
+
+    // await supabase
+    //   .from("stopped_queue")
+    //   .update({
+    //     status: "completed",
+    //     assigned_operator_id: null,
+    //     assigned_at: null,
+    //     expires_at: null,
+    //   })
+    //   .eq("id", queue_id);
 
     if (completeError) {
       throw completeError;
@@ -2520,6 +2525,51 @@ app.post("/stopped/release", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+async function populateStoppedQueue() {
+  try {
+    console.log("🔍 Checking stopped conversations...");
+
+    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+
+    // Latest fictional messages older than 48 hours
+    const { data: latestMessages, error } = await supabase.rpc(
+      "get_stopped_candidates",
+      {
+        p_cutoff: cutoff,
+      },
+    );
+
+    if (error) throw error;
+
+    if (!latestMessages?.length) {
+      console.log("✅ No stopped conversations.");
+      return;
+    }
+
+    for (const row of latestMessages) {
+      const { error: insertError } = await supabase
+        .from("stopped_queue")
+        .insert({
+          conversation_id: row.conversation_id,
+          user_profile_id: row.user_id,
+          fictional_profile_id: row.fictional_profile_id,
+          status: "pending",
+        });
+
+      if (insertError) {
+        // Ignore duplicate queue entries
+        if (insertError.code !== "23505") {
+          console.error(insertError);
+        }
+      } else {
+        console.log(`✅ Queued conversation ${row.conversation_id}`);
+      }
+    }
+  } catch (err) {
+    console.error("populateStoppedQueue()", err);
+  }
+}
 
 // ==========================
 // SIMPLIFIED MANAGER API ENDPOINTS
@@ -4421,4 +4471,10 @@ setInterval(cleanupStaleOperators, 2 * 60 * 1000);
 
 app.listen(PORT, () => {
   console.log(`✅ Operator API running on port ${PORT}`);
+
+  // Run once on startup
+  populateStoppedQueue();
+
+  // Then every 15 minutes
+  setInterval(populateStoppedQueue, 15 * 60 * 1000);
 });
