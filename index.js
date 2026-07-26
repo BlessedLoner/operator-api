@@ -1771,17 +1771,19 @@ app.post("/operator/send-photo", async (req, res) => {
 });
 
 // Get user logbook
-app.get("/operator/user-logbook/:userId", async (req, res) => {
+app.get("/operator/user-logbook/:conversationId", async (req, res) => {
   try {
-    const { userId } = req.params;
+    const { conversationId } = req.params;
+
     const { data, error } = await supabase
       .from("user_logbook")
       .select("*")
-      .eq("user_profile_id", userId);
+      .eq("conversation_id", conversationId);
 
     if (error) throw error;
 
     const logbookMap = {};
+
     data?.forEach((item) => {
       logbookMap[item.category] = item.value;
     });
@@ -1824,17 +1826,19 @@ app.post("/operator/user-logbook", async (req, res) => {
 });
 
 // Get fictional logbook
-app.get("/operator/fictional-logbook/:fictionalId", async (req, res) => {
+app.get("/operator/fictional-logbook/:conversationId", async (req, res) => {
   try {
-    const { fictionalId } = req.params;
+    const { conversationId } = req.params;
+
     const { data, error } = await supabase
       .from("fictional_logbook")
       .select("*")
-      .eq("fictional_profile_id", fictionalId);
+      .eq("conversation_id", conversationId);
 
     if (error) throw error;
 
     const logbookMap = {};
+
     data?.forEach((item) => {
       logbookMap[item.category] = item.value;
     });
