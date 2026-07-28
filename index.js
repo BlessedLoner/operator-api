@@ -1960,7 +1960,7 @@ async function getSuggestedFictionalProfiles(user) {
 
   if (error) throw error;
 
-  if (!data || data.length === 0) return [];
+  if (!data?.length) return [];
 
   let matches = [...data];
 
@@ -1968,9 +1968,10 @@ async function getSuggestedFictionalProfiles(user) {
   if (user.user_city) {
     matches.sort((a, b) => {
       const aScore =
-        a.city?.toLowerCase() === user.user_city?.toLowerCase() ? 1 : 0;
+        (a.city || "").toLowerCase() === user.user_city.toLowerCase() ? 1 : 0;
       const bScore =
-        b.city?.toLowerCase() === user.user_city?.toLowerCase() ? 1 : 0;
+        (b.city || "").toLowerCase() === user.user_city.toLowerCase() ? 1 : 0;
+
       return bScore - aScore;
     });
   }
@@ -1979,9 +1980,10 @@ async function getSuggestedFictionalProfiles(user) {
   if (user.user_state) {
     matches.sort((a, b) => {
       const aScore =
-        a.state?.toLowerCase() === user.user_state?.toLowerCase() ? 1 : 0;
+        (a.state || "").toLowerCase() === user.user_state.toLowerCase() ? 1 : 0;
       const bScore =
-        b.state?.toLowerCase() === user.user_state?.toLowerCase() ? 1 : 0;
+        (b.state || "").toLowerCase() === user.user_state.toLowerCase() ? 1 : 0;
+
       return bScore - aScore;
     });
   }
@@ -1995,7 +1997,7 @@ async function getSuggestedFictionalProfiles(user) {
     });
   }
 
-  // Shuffle top 20
+  // Shuffle top candidates
   matches = matches.slice(0, 20).sort(() => Math.random() - 0.5);
 
   return matches.slice(0, 10);
@@ -2003,25 +2005,45 @@ async function getSuggestedFictionalProfiles(user) {
 
 // Smart fictional profile selector for pokers - matches by country, city, interests
 async function selectBestFictionalProfile(user) {
+  // If user already liked someone, always suggest that person first.
   if (user.liked_fictional_ids?.length) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("fictional_profiles")
       .select("*")
       .in("id", user.liked_fictional_ids)
-      .eq("is_deleted", false)
-      .limit(1);
+      .eq("is_deleted", false);
 
-    if (data?.length) return data[0];
+    if (error) throw error;
+
+    if (data?.length) {
+      return {
+        bestProfile: data[0],
+        suggestions: data,
+      };
+    }
   }
+
+  // Otherwise generate suggestions
 
   const suggestions = await getSuggestedFictionalProfiles(user);
 
-  if (suggestions.length)
-    return suggestions[Math.floor(Math.random() * suggestions.length)];
+  if (!suggestions.length) {
+    return {
+      bestProfile: null,
+      suggestions: [],
+    };
+  }
 
-  return null;
+  // Random default selection from suggestions
+
+  const bestProfile =
+    suggestions[Math.floor(Math.random() * suggestions.length)];
+
+  return {
+    bestProfile,
+    suggestions,
+  };
 }
-
 // async function selectBestFictionalProfile(user) {
 //   console.log("🎯 Selecting best fictional profile for user:", {
 //     country: user.user_country,
@@ -2286,7 +2308,7 @@ app.get("/poker/next-user", async (req, res) => {
       user_age: pending.user_age,
     });
 
-    if (!bestFictional) {
+    if (!bestProfile) {
       return res.json({
         hasUser: false,
         message: "No fictional profiles available",
@@ -2312,7 +2334,7 @@ app.get("/poker/next-user", async (req, res) => {
 
     if (updateError) throw updateError;
 
-    res.json({
+    return res.json({
       hasUser: true,
       type: "new",
       queueId: updated.id,
@@ -2326,7 +2348,7 @@ app.get("/poker/next-user", async (req, res) => {
         liked_fictional_ids: updated.liked_fictional_ids,
         liked_fictional_names: updated.liked_fictional_names,
       },
-      suggestedFictional: bestFictional,
+      suggestedFictional: bestProfile,
       suggestedProfiles: suggestions,
       expiresAt: expiresAt.toISOString(),
     });
