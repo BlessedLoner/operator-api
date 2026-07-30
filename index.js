@@ -110,7 +110,7 @@ app.post("/user/send-message", async (req, res) => {
         .update({
           last_message_at: message.created_at,
           last_message_sender_id: user_id,
-          last_message_preview: content?.substring(0, 50) || "[Image]",
+          last_message_preview: content?.substring(0, 50) || "📷 Sent a photo",
         })
         .eq("id", conversation_id);
 
@@ -177,7 +177,7 @@ app.post("/user/send-message", async (req, res) => {
       .update({
         last_message_at: message.created_at,
         last_message_sender_id: user_id,
-        last_message_preview: content?.substring(0, 50) || "[Image]",
+        last_message_preview: content?.substring(0, 50) || "📷 Sent a photo",
       })
       .eq("id", conversation_id);
 
@@ -1759,7 +1759,7 @@ app.post("/operator/send-photo", async (req, res) => {
       .update({
         last_message_at: message.created_at,
         last_message_sender_id: fictional_profile_id,
-        last_message_preview: "[Image]",
+        last_message_preview: "📷 Sent a photo",
       })
       .eq("id", conversation_id);
 
