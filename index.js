@@ -237,39 +237,74 @@ app.post("/user/send-message", async (req, res) => {
 
 app.get("/shuffle-profiles", async (req, res) => {
   try {
-    console.log("🔀 Starting profile shuffle...");
+    console.log("🔀 Starting weighted profile shuffle...");
 
     const { data: profiles, error } = await supabase
       .from("fictional_profiles")
-      .select("id");
+      .select("id, created_at")
+      .eq("is_deleted", false)
+      .order("created_at", { ascending: false });
 
     if (error) throw error;
 
-    for (const profile of profiles) {
-      const randomOrder = Math.floor(Math.random() * 1000000);
+    if (!profiles || profiles.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No profiles found",
+      });
+    }
 
+    // Fisher-Yates shuffle
+    const shuffle = (arr) => {
+      const copy = [...arr];
+
+      for (let i = copy.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [copy[i], copy[j]] = [copy[j], copy[i]];
+      }
+
+      return copy;
+    };
+
+    const total = profiles.length;
+
+    const newestCount = Math.floor(total * 0.6);
+    const middleCount = Math.floor(total * 0.25);
+
+    const newest = profiles.slice(0, newestCount);
+    const middle = profiles.slice(newestCount, newestCount + middleCount);
+    const oldest = profiles.slice(newestCount + middleCount);
+
+    const finalOrder = [
+      ...shuffle(newest),
+      ...shuffle(middle),
+      ...shuffle(oldest),
+    ];
+
+    for (let i = 0; i < finalOrder.length; i++) {
       const { error: updateError } = await supabase
         .from("fictional_profiles")
         .update({
-          shuffle_order: randomOrder,
+          shuffle_order: i + 1,
         })
-        .eq("id", profile.id);
+        .eq("id", finalOrder[i].id);
 
       if (updateError) {
-        console.error(`❌ Failed updating profile ${profile.id}:`, updateError);
+        console.error(`Failed updating ${finalOrder[i].id}`, updateError);
       }
     }
 
-    console.log("✅ Profiles shuffled successfully");
+    console.log(`✅ Successfully reordered ${finalOrder.length} profiles`);
 
     res.json({
       success: true,
-      shuffled: profiles.length,
+      shuffled: finalOrder.length,
     });
   } catch (err) {
-    console.error("❌ Shuffle error:", err);
+    console.error(err);
 
     res.status(500).json({
+      success: false,
       error: err.message,
     });
   }
@@ -288,6 +323,7 @@ app.get("/operator/conversations", async (req, res) => {
       id,
       created_at,
       user_profiles!conversations_user_id_fkey (
+
         id,
         display_name
       ),
