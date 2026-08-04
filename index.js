@@ -275,6 +275,90 @@ app.get("/shuffle-profiles", async (req, res) => {
   }
 });
 
+// Run this as a one-time script or scheduled job
+async function smartShuffleProfiles() {
+  try {
+    console.log("🔄 Starting smart profile shuffle...");
+
+    // Get all active profiles
+    const { data: profiles, error } = await supabase
+      .from("fictional_profiles")
+      .select("id, created_at, image_url, bio, age, country, state")
+      .eq("is_deleted", false);
+
+    if (error) throw error;
+
+    const now = new Date();
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    // Score each profile
+    const scoredProfiles = profiles.map((profile) => {
+      let score = 0;
+
+      // ✅ Newer profiles get higher score (created in last 30 days)
+      const createdAt = new Date(profile.created_at);
+      if (createdAt > thirtyDaysAgo) {
+        const daysAgo = Math.floor((now - createdAt) / (1000 * 60 * 60 * 24));
+        score += Math.max(0, 30 - daysAgo); // 0-30 points based on recency
+      }
+
+      // ✅ Profiles with images get bonus
+      if (profile.image_url) score += 20;
+
+      // ✅ Profiles with bio get bonus
+      if (profile.bio && profile.bio.length > 10) score += 15;
+
+      // ✅ Profiles in supported countries get slight bonus (optional)
+      const supportedCountries = ["US", "GB", "CA", "AU", "ZA"];
+      if (supportedCountries.includes(profile.country)) score += 5;
+
+      // ✅ Add some randomness (so not all scores are identical)
+      score += Math.random() * 5;
+
+      return {
+        ...profile,
+        score,
+        // Add a random tie-breaker for equal scores
+        random: Math.random(),
+      };
+    });
+
+    // Sort by score (highest first), then by random
+    scoredProfiles.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.random - b.random;
+    });
+
+    // Update shuffle_order for each profile
+    let updateCount = 0;
+    for (let i = 0; i < scoredProfiles.length; i++) {
+      const profile = scoredProfiles[i];
+      const order = i + 1; // 1-based order
+
+      const { error: updateError } = await supabase
+        .from("fictional_profiles")
+        .update({ shuffle_order: order })
+        .eq("id", profile.id);
+
+      if (updateError) {
+        console.error(
+          `❌ Failed to update profile ${profile.id}:`,
+          updateError,
+        );
+      } else {
+        updateCount++;
+      }
+    }
+
+    console.log(`✅ Successfully updated ${updateCount} profiles`);
+    return { success: true, updated: updateCount };
+  } catch (err) {
+    console.error("❌ Shuffle error:", err);
+    return { success: false, error: err.message };
+  }
+}
+
 // ==========================
 // OPERATOR ROUTES
 // ==========================
