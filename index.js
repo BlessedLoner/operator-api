@@ -237,13 +237,16 @@ app.post("/user/send-message", async (req, res) => {
 
 app.get("/shuffle-profiles", async (req, res) => {
   try {
-    console.log("🔀 Starting weighted profile shuffle...");
+    console.log("🔄 Rotating profile pages...");
+
+    const PAGE_SIZE = 20;
+    const START_PAGE = 3;
 
     const { data: profiles, error } = await supabase
       .from("fictional_profiles")
-      .select("id, created_at")
+      .select("id")
       .eq("is_deleted", false)
-      .order("created_at", { ascending: false });
+      .order("shuffle_order", { ascending: true });
 
     if (error) throw error;
 
@@ -254,51 +257,31 @@ app.get("/shuffle-profiles", async (req, res) => {
       });
     }
 
-    // Fisher-Yates shuffle
-    const shuffle = (arr) => {
-      const copy = [...arr];
+    // Skip first two pages
+    const rotateIndex = PAGE_SIZE * (START_PAGE - 1);
 
-      for (let i = copy.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [copy[i], copy[j]] = [copy[j], copy[i]];
-      }
-
-      return copy;
-    };
-
-    const total = profiles.length;
-
-    const newestCount = Math.floor(total * 0.6);
-    const middleCount = Math.floor(total * 0.25);
-
-    const newest = profiles.slice(0, newestCount);
-    const middle = profiles.slice(newestCount, newestCount + middleCount);
-    const oldest = profiles.slice(newestCount + middleCount);
-
-    const finalOrder = [
-      ...shuffle(newest),
-      ...shuffle(middle),
-      ...shuffle(oldest),
+    const rotated = [
+      ...profiles.slice(rotateIndex),
+      ...profiles.slice(0, rotateIndex),
     ];
 
-    for (let i = 0; i < finalOrder.length; i++) {
+    for (let i = 0; i < rotated.length; i++) {
       const { error: updateError } = await supabase
         .from("fictional_profiles")
         .update({
           shuffle_order: i + 1,
         })
-        .eq("id", finalOrder[i].id);
+        .eq("id", rotated[i].id);
 
-      if (updateError) {
-        console.error(`Failed updating ${finalOrder[i].id}`, updateError);
-      }
+      if (updateError) throw updateError;
     }
 
-    console.log(`✅ Successfully reordered ${finalOrder.length} profiles`);
+    console.log("✅ Rotation complete");
 
     res.json({
       success: true,
-      shuffled: finalOrder.length,
+      rotated: rotated.length,
+      startedFromPage: START_PAGE,
     });
   } catch (err) {
     console.error(err);
@@ -309,7 +292,6 @@ app.get("/shuffle-profiles", async (req, res) => {
     });
   }
 });
-
 // ==========================
 // OPERATOR ROUTES
 // ==========================
