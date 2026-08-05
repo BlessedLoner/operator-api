@@ -1,49 +1,141 @@
-const { Resend } = require("resend");
+import { Resend } from "resend";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-async function sendNewMessageEmail({ email, displayName, senderName }) {
+async function sendNewMessageEmail({
+  to,
+  senderName,
+  senderAge,
+  senderLocation,
+  senderPhoto,
+  preview,
+}) {
   try {
-    await resend.emails.send({
-      from: "StripPals <notifications@YOURDOMAIN.com>",
-      to: email,
+    const response = await resend.emails.send({
+      from: "StripPals <onboarding@resend.dev>",
+
+      to,
+
       subject: `${senderName} sent you a new message 💌`,
+
       html: `
-        <div style="font-family:Arial;padding:30px">
-            <h2>Hello ${displayName},</h2>
+      <div style="
+          max-width:600px;
+          margin:auto;
+          font-family:Arial,sans-serif;
+          background:#ffffff;
+          border-radius:12px;
+          overflow:hidden;
+          border:1px solid #eee;
+      ">
 
-            <p>
-                You have received a new message on StripPals.
-            </p>
+          <div style="
+              background:#d63384;
+              padding:25px;
+              text-align:center;
+              color:white;
+          ">
+              <h1 style="margin:0;">StripPals</h1>
+          </div>
 
-            <p>
-                Come back now before the conversation goes cold.
-            </p>
+          <div style="padding:30px;">
 
-            <a href="https://strippals.com/chat"
-               style="
-               display:inline-block;
-               background:#e91e63;
-               color:white;
-               padding:12px 20px;
-               border-radius:8px;
-               text-decoration:none;">
-               Open Chat
-            </a>
+              ${
+                senderPhoto
+                  ? `
+              <div style="text-align:center;margin-bottom:20px;">
+                  <img
+                      src="${senderPhoto}"
+                      style="
+                          width:110px;
+                          height:110px;
+                          border-radius:50%;
+                          object-fit:cover;
+                      "
+                  />
+              </div>
+              `
+                  : ""
+              }
 
-            <p style="margin-top:30px;color:#888;">
-                You're receiving this because you have a StripPals account.
-            </p>
-        </div>
+              <h2 style="text-align:center;margin-bottom:5px;">
+                  ${senderName}
+                  ${senderAge ? `, ${senderAge}` : ""}
+              </h2>
+
+              ${
+                senderLocation
+                  ? `
+              <p style="
+                  text-align:center;
+                  color:#777;
+                  margin-top:0;
+              ">
+                  📍 ${senderLocation}
+              </p>
+              `
+                  : ""
+              }
+
+              <p style="font-size:16px;">
+                  Someone is waiting for your reply.
+              </p>
+
+              ${
+                preview
+                  ? `
+              <div style="
+                  background:#f7f7f7;
+                  border-left:4px solid #d63384;
+                  padding:15px;
+                  margin:20px 0;
+                  font-style:italic;
+              ">
+                  "${preview.substring(0, 100)}"
+              </div>
+              `
+                  : ""
+              }
+
+              <div style="text-align:center;margin-top:30px;">
+                  <a
+                      href="https://strippals.com/chat"
+                      style="
+                          display:inline-block;
+                          background:#d63384;
+                          color:white;
+                          padding:14px 30px;
+                          text-decoration:none;
+                          border-radius:8px;
+                          font-weight:bold;
+                      "
+                  >
+                      Continue Conversation
+                  </a>
+              </div>
+
+              <p style="
+                  color:#888;
+                  margin-top:40px;
+                  font-size:13px;
+                  text-align:center;
+              ">
+                  You're receiving this because you have a StripPals account.
+              </p>
+
+          </div>
+
+      </div>
       `,
     });
 
-    console.log("Email sent.");
+    console.log("✅ Email sent:", response);
+
+    return response;
   } catch (err) {
-    console.error(err);
+    console.error("❌ Email error:", err);
+    throw err;
   }
 }
 
-module.exports = {
-  sendNewMessageEmail,
-};
+export { sendNewMessageEmail };

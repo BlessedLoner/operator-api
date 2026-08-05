@@ -4,6 +4,7 @@ import bcrypt from "bcrypt";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import paymentsRouter from "./src/routes/payments.js";
+import { sendNewMessageEmail } from "./src/services/emailService.js";
 
 dotenv.config();
 
@@ -32,8 +33,6 @@ const supabase = createClient(
 app.get("/", (_req, res) => {
   res.send("Operator API running");
 });
-
-const { sendNewMessageEmail } = require("./src/services/emailService");
 
 // Add middleware to check admin role
 const requireAdmin = async (req, res, next) => {
@@ -2503,15 +2502,33 @@ app.post("/poker/send-flirt", async (req, res) => {
           // Get fictional profile info
           const { data: fictionalProfile } = await supabase
             .from("fictional_profiles")
-            .select("display_name")
+            .select(
+              `
+    display_name,
+    age,
+    city,
+    country,
+    image_url
+  `,
+            )
             .eq("id", fictional_profile_id)
             .single();
 
           await sendNewMessageEmail({
             to: user.email,
-            senderName: fictionalProfile?.display_name || "Someone",
-          });
 
+            senderName: fictionalProfile?.display_name || "Someone",
+
+            senderAge: fictionalProfile?.age,
+
+            senderLocation: [fictionalProfile?.city, fictionalProfile?.country]
+              .filter(Boolean)
+              .join(", "),
+
+            senderPhoto: fictionalProfile?.image_url,
+
+            preview: content,
+          });
           console.log("📧 Email notification sent to", user.email);
         }
       } catch (emailErr) {
