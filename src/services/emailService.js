@@ -12,7 +12,7 @@ async function sendNewMessageEmail({
 }) {
   try {
     const response = await resend.emails.send({
-      from: "StripPals <notifications@strippals.com>",
+      from: "StripPals <strippals.com>",
 
       to,
 
