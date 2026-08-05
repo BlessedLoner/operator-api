@@ -33,6 +33,8 @@ app.get("/", (_req, res) => {
   res.send("Operator API running");
 });
 
+const { sendNewMessageEmail } = require("./src/services/emailService");
+
 // Add middleware to check admin role
 const requireAdmin = async (req, res, next) => {
   const managerId = req.headers["x-manager-id"];
@@ -2481,6 +2483,41 @@ app.post("/poker/send-flirt", async (req, res) => {
     }
 
     console.log(`✅ Flirt message inserted: ${message.id}`);
+
+    // Get the user's auth email
+    const { data: profileData, error: profileError } = await supabase
+      .from("user_profiles")
+      .select("user_id")
+      .eq("id", user_profile_id)
+      .single();
+
+    if (!profileError && profileData?.user_id) {
+      try {
+        // Get Auth user
+        const {
+          data: { user },
+          error: authError,
+        } = await supabase.auth.admin.getUserById(profileData.user_id);
+
+        if (!authError && user?.email) {
+          // Get fictional profile info
+          const { data: fictionalProfile } = await supabase
+            .from("fictional_profiles")
+            .select("display_name")
+            .eq("id", fictional_profile_id)
+            .single();
+
+          await sendNewMessageEmail({
+            to: user.email,
+            senderName: fictionalProfile?.display_name || "Someone",
+          });
+
+          console.log("📧 Email notification sent to", user.email);
+        }
+      } catch (emailErr) {
+        console.error("Email notification failed:", emailErr);
+      }
+    }
 
     // Update conversation last message
     await supabase
