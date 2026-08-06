@@ -4334,6 +4334,450 @@ app.get("/manager/queue-stats", async (req, res) => {
   }
 });
 
+// =============================================
+// OUTREACH OPERATOR ROUTES
+// =============================================
+
+// ✅ Middleware to verify outreach operator
+const verifyOutreachOperator = async (req, res, next) => {
+  const operatorId =
+    req.headers["x-operator-id"] ||
+    req.body.operator_id ||
+    req.query.operator_id;
+
+  if (!operatorId) {
+    return res.status(401).json({ error: "Operator ID required" });
+  }
+
+  const { data: operator, error } = await supabase
+    .from("operator_accounts")
+    .select("operator_type, is_active")
+    .eq("id", operatorId)
+    .single();
+
+  if (error || !operator) {
+    return res.status(404).json({ error: "Operator not found" });
+  }
+
+  if (!operator.is_active) {
+    return res.status(403).json({ error: "Account deactivated" });
+  }
+
+  if (operator.operator_type !== "outreach") {
+    return res
+      .status(403)
+      .json({ error: "Not authorized - Outreach operators only" });
+  }
+
+  req.operator = operator;
+  req.operatorId = operatorId;
+  next();
+};
+
+// =============================================
+// 1️⃣ SEARCH USERS
+// =============================================
+app.get("/operator/search-users", verifyOutreachOperator, async (req, res) => {
+  try {
+    const { query } = req.query;
+
+    if (!query || query.length < 2) {
+      return res.json({ users: [] });
+    }
+
+    const searchQuery = `%${query}%`;
+
+    const { data: users, error } = await supabase
+      .from("user_profiles")
+      .select(
+        `
+        id,
+        display_name,
+        email,
+        age,
+        gender,
+        city,
+        state,
+        country,
+        interests,
+        relationship_goals,
+        date_of_birth
+      `,
+      )
+      .or(`display_name.ilike.${searchQuery},email.ilike.${searchQuery}`)
+      .limit(20);
+
+    if (error) throw error;
+
+    res.json({ users: users || [] });
+  } catch (err) {
+    console.error("Search users error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =============================================
+// 2️⃣ GET SUGGESTED FICTIONAL PROFILES
+// =============================================
+app.get(
+  "/operator/suggested-fictionals",
+  verifyOutreachOperator,
+  async (req, res) => {
+    try {
+      const { user_id } = req.query;
+
+      if (!user_id) {
+        return res.status(400).json({ error: "Missing user_id" });
+      }
+
+      // Get user details
+      const { data: user, error: userError } = await supabase
+        .from("user_profiles")
+        .select("*")
+        .eq("id", user_id)
+        .single();
+
+      if (userError) throw userError;
+
+      // Build query for matching fictional profiles
+      let query = supabase
+        .from("fictional_profiles")
+        .select("*")
+        .eq("is_deleted", false)
+        .eq("country", user.country);
+
+      // Match by state if available
+      if (user.state) {
+        query = query.eq("state", user.state);
+      }
+
+      // Match by city if available
+      if (user.city) {
+        query = query.ilike("city", `%${user.city}%`);
+      }
+
+      // Match by age range (±5 years)
+      if (user.age) {
+        const minAge = Math.max(18, user.age - 5);
+        const maxAge = user.age + 5;
+        query = query.gte("age", minAge).lte("age", maxAge);
+      }
+
+      // Get up to 20 profiles
+      const { data: profiles, error: profileError } = await query.limit(20);
+
+      if (profileError) throw profileError;
+
+      // If not enough profiles, get more from same country
+      let results = profiles || [];
+      if (results.length < 20) {
+        const { data: moreProfiles } = await supabase
+          .from("fictional_profiles")
+          .select("*")
+          .eq("is_deleted", false)
+          .eq("country", user.country)
+          .limit(20 - results.length);
+
+        if (moreProfiles) {
+          const existingIds = new Set(results.map((p) => p.id));
+          const uniqueMore = moreProfiles.filter((p) => !existingIds.has(p.id));
+          results = [...results, ...uniqueMore];
+        }
+      }
+
+      // Shuffle results
+      for (let i = results.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [results[i], results[j]] = [results[j], results[i]];
+      }
+
+      res.json({
+        suggested_profiles: results.slice(0, 20),
+        matched_criteria: {
+          state: user.state || "any",
+          city: user.city || "any",
+          age_range: user.age ? `${user.age - 5} - ${user.age + 5}` : "any",
+        },
+      });
+    } catch (err) {
+      console.error("Suggested profiles error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// =============================================
+// 3️⃣ SEARCH FICTIONAL PROFILES BY NAME
+// =============================================
+app.get(
+  "/operator/search-fictionals",
+  verifyOutreachOperator,
+  async (req, res) => {
+    try {
+      const { query } = req.query;
+
+      if (!query || query.length < 2) {
+        return res.json({ profiles: [] });
+      }
+
+      const searchQuery = `%${query}%`;
+
+      const { data: profiles, error } = await supabase
+        .from("fictional_profiles")
+        .select("*")
+        .eq("is_deleted", false)
+        .or(`display_name.ilike.${searchQuery},name.ilike.${searchQuery}`)
+        .limit(20);
+
+      if (error) throw error;
+
+      res.json({ profiles: profiles || [] });
+    } catch (err) {
+      console.error("Search fictional profiles error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// =============================================
+// 4️⃣ SEND MANUAL FLIRT
+// =============================================
+app.post(
+  "/operator/send-manual-flirt",
+  verifyOutreachOperator,
+  async (req, res) => {
+    try {
+      const {
+        user_id,
+        fictional_profile_id,
+        content,
+        operator_id,
+        send_email,
+      } = req.body;
+
+      if (!user_id || !fictional_profile_id || !content || !operator_id) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+
+      if (content.length < 20) {
+        return res
+          .status(400)
+          .json({ error: "Message must be at least 20 characters" });
+      }
+
+      // Check daily limit (20 per day)
+      const today = new Date().toISOString().split("T")[0];
+      const { data: dailyCount, error: countError } = await supabase
+        .from("outreach_daily_limits")
+        .select("count")
+        .eq("operator_id", operator_id)
+        .eq("date", today)
+        .maybeSingle();
+
+      if (dailyCount && dailyCount.count >= 20) {
+        return res.status(429).json({
+          error:
+            "Daily limit reached (20 messages per day). Please try again tomorrow.",
+        });
+      }
+
+      // Check if conversation exists
+      let conversationId;
+      const { data: existingConv } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("fictional_profile_id", fictional_profile_id)
+        .maybeSingle();
+
+      let isNewConversation = false;
+
+      if (existingConv) {
+        conversationId = existingConv.id;
+      } else {
+        // Create new conversation
+        const { data: newConv, error: convError } = await supabase
+          .from("conversations")
+          .insert({
+            user_id: user_id,
+            fictional_profile_id: fictional_profile_id,
+            started_by_flirt: true,
+          })
+          .select()
+          .single();
+
+        if (convError) throw convError;
+        conversationId = newConv.id;
+        isNewConversation = true;
+      }
+
+      // Insert flirt message
+      const { data: message, error: msgError } = await supabase
+        .from("messages")
+        .insert({
+          conversation_id: conversationId,
+          sender_type: "fictional",
+          sender_fictional_id: fictional_profile_id,
+          content: content,
+          direction: "fictional_to_user",
+          credit_cost: 0,
+          operator_id: operator_id,
+          is_flirt: true,
+        })
+        .select()
+        .single();
+
+      if (msgError) throw msgError;
+
+      // Update conversation last message
+      await supabase
+        .from("conversations")
+        .update({
+          last_message_at: message.created_at,
+          last_message_sender_id: fictional_profile_id,
+          last_message_preview: content.substring(0, 50),
+        })
+        .eq("id", conversationId);
+
+      // Record in outreach history
+      await supabase.from("outreach_history").insert({
+        operator_id: operator_id,
+        user_id: user_id,
+        fictional_profile_id: fictional_profile_id,
+        message_content: content,
+        email_sent: send_email || false,
+      });
+
+      // Update daily limit
+      if (dailyCount) {
+        await supabase
+          .from("outreach_daily_limits")
+          .update({ count: dailyCount.count + 1 })
+          .eq("operator_id", operator_id)
+          .eq("date", today);
+      } else {
+        await supabase.from("outreach_daily_limits").insert({
+          operator_id: operator_id,
+          date: today,
+          count: 1,
+        });
+      }
+
+      // Send email notification if checked
+      if (send_email) {
+        try {
+          const { data: userProfile } = await supabase
+            .from("user_profiles")
+            .select("user_id, display_name")
+            .eq("id", user_id)
+            .single();
+
+          if (userProfile?.user_id) {
+            const {
+              data: { user },
+              error: authError,
+            } = await supabase.auth.admin.getUserById(userProfile.user_id);
+
+            if (!authError && user?.email) {
+              const { data: fictionalProfile } = await supabase
+                .from("fictional_profiles")
+                .select("display_name, age, city, country, image_url")
+                .eq("id", fictional_profile_id)
+                .single();
+
+              await sendNewMessageEmail({
+                to: user.email,
+                senderName: fictionalProfile?.display_name || "Someone",
+                senderAge: fictionalProfile?.age,
+                senderLocation: [
+                  fictionalProfile?.city,
+                  fictionalProfile?.country,
+                ]
+                  .filter(Boolean)
+                  .join(", "),
+                senderPhoto: fictionalProfile?.image_url,
+                preview: content,
+              });
+              console.log("📧 Email notification sent to", user.email);
+            }
+          }
+        } catch (emailErr) {
+          console.error("Email notification failed:", emailErr);
+        }
+      }
+
+      res.json({
+        success: true,
+        conversationId: conversationId,
+        messageId: message.id,
+        is_new_conversation: isNewConversation,
+        remaining_daily: 19 - (dailyCount?.count || 0),
+      });
+    } catch (err) {
+      console.error("Send manual flirt error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// =============================================
+// 5️⃣ GET OUTREACH HISTORY
+// =============================================
+app.get(
+  "/operator/outreach-history",
+  verifyOutreachOperator,
+  async (req, res) => {
+    try {
+      const operatorId = req.operatorId;
+
+      const { data, error } = await supabase
+        .from("outreach_history")
+        .select(
+          `
+        id,
+        sent_at,
+        email_sent,
+        user_profiles!user_id (
+          id,
+          display_name,
+          city,
+          state,
+          country
+        ),
+        fictional_profiles!fictional_profile_id (
+          id,
+          display_name,
+          image_url
+        )
+      `,
+        )
+        .eq("operator_id", operatorId)
+        .order("sent_at", { ascending: false })
+        .limit(50);
+
+      if (error) throw error;
+
+      // Calculate days ago
+      const now = new Date();
+      const history =
+        data?.map((item) => {
+          const sentDate = new Date(item.sent_at);
+          const daysAgo = Math.floor((now - sentDate) / (1000 * 60 * 60 * 24));
+          return {
+            ...item,
+            days_ago: daysAgo,
+            is_old: daysAgo >= 5,
+          };
+        }) || [];
+
+      res.json({ history });
+    } catch (err) {
+      console.error("Outreach history error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
 // ==========================
 // STRIPE ROUTES
 // ==========================
