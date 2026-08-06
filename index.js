@@ -4393,7 +4393,6 @@ app.get("/operator/search-users", verifyOutreachOperator, async (req, res) => {
         `
         id,
         display_name,
-        email,
         age,
         gender,
         city,
@@ -4404,7 +4403,7 @@ app.get("/operator/search-users", verifyOutreachOperator, async (req, res) => {
         date_of_birth
       `,
       )
-      .or(`display_name.ilike.${searchQuery},email.ilike.${searchQuery}`)
+      .or(`display_name.ilike.${searchQuery},state.ilike.${searchQuery}`)
       .limit(20);
 
     if (error) throw error;
