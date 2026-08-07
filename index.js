@@ -2898,190 +2898,6 @@ app.get("/manager/analytics", async (req, res) => {
   }
 });
 
-// app.get("/manager/conversations", async (req, res) => {
-//   try {
-//     const {
-//       country = "all",
-//       page = 1,
-//       limit = 20,
-//       startDate = "",
-//       endDate = "",
-//       search = "",
-//       operator_type = "all",
-//     } = req.query;
-
-//     console.log("📊 Conversations request:", {
-//       country,
-//       page,
-//       limit,
-//       startDate,
-//       endDate,
-//       search,
-//       operator_type,
-//     });
-
-//     const from = (parseInt(page) - 1) * parseInt(limit);
-//     const to = from + parseInt(limit) - 1;
-
-//     // Get conversations with date filters
-//     let query = supabase
-//       .from("conversations")
-//       .select(
-//         `
-//         id,
-//         created_at,
-//         user_id,
-//         fictional_profile_id
-//       `,
-//         { count: "exact" },
-//       )
-//       .order("created_at", { ascending: false })
-//       .range(from, to);
-
-//     // Apply date filters
-//     if (startDate) {
-//       const startDateTime = new Date(startDate);
-//       startDateTime.setHours(0, 0, 0, 0);
-//       query = query.gte("created_at", startDateTime.toISOString());
-//     }
-
-//     if (endDate) {
-//       const endDateTime = new Date(endDate);
-//       endDateTime.setHours(23, 59, 59, 999);
-//       query = query.lte("created_at", endDateTime.toISOString());
-//     }
-
-//     const { data: conversations, error, count } = await query;
-
-//     if (error) {
-//       console.error("Conversations error:", error);
-//       return res.status(500).json({ error: error.message });
-//     }
-
-//     if (!conversations || conversations.length === 0) {
-//       return res.json({
-//         conversations: [],
-//         total: 0,
-//         page: parseInt(page),
-//         totalPages: 0,
-//       });
-//     }
-
-//     const conversationsWithDetails = [];
-
-//     for (const conv of conversations) {
-//       // Get FULL user profile
-//       const { data: user } = await supabase
-//         .from("user_profiles")
-//         .select("*")
-//         .eq("id", conv.user_id)
-//         .single();
-
-//       // Get FULL fictional profile
-//       const { data: fictional } = await supabase
-//         .from("fictional_profiles")
-//         .select("*")
-//         .eq("id", conv.fictional_profile_id)
-//         .single();
-
-//       // ✅ NEW: Get ALL messages for this conversation with operator details
-//       const { data: messages } = await supabase
-//         .from("messages")
-//         .select(
-//           `
-//           *,
-//           operator_accounts!operator_id (
-//             id,
-//             username,
-//             full_name,
-//             operator_type
-//           )
-//         `,
-//         )
-//         .eq("conversation_id", conv.id)
-//         .order("created_at", { ascending: true });
-
-//       // Get latest message to find operator
-//       const { data: latestMessage } = await supabase
-//         .from("messages")
-//         .select("id, operator_id, created_at, content")
-//         .eq("conversation_id", conv.id)
-//         .order("created_at", { ascending: false })
-//         .limit(1)
-//         .maybeSingle();
-
-//       let operator = null;
-//       let operatorTypeValue = null;
-
-//       if (latestMessage?.operator_id) {
-//         const { data: opData } = await supabase
-//           .from("operator_accounts")
-//           .select("id, username, full_name, email, operator_type")
-//           .eq("id", latestMessage.operator_id)
-//           .single();
-//         operator = opData;
-//         operatorTypeValue = opData?.operator_type;
-//       }
-
-//       conversationsWithDetails.push({
-//         id: conv.id,
-//         created_at: conv.created_at,
-//         last_message_at: latestMessage?.created_at || conv.created_at,
-//         last_message_preview:
-//           latestMessage?.content?.substring(0, 50) || "No messages",
-//         user_profiles: user,
-//         fictional_profiles: fictional,
-//         operator: operator,
-//         operator_type: operatorTypeValue,
-//         messages: messages || [], // ✅ Now includes operator data for each message
-//       });
-//     }
-
-//     // Apply filters
-//     let filtered = conversationsWithDetails;
-
-//     if (operator_type && operator_type !== "all") {
-//       filtered = conversationsWithDetails.filter(
-//         (conv) => conv.operator_type === operator_type,
-//       );
-//     }
-
-//     if (country && country !== "all") {
-//       filtered = filtered.filter(
-//         (conv) =>
-//           conv.user_profiles?.country === country ||
-//           conv.fictional_profiles?.country === country,
-//       );
-//     }
-
-//     if (search && search.trim() !== "") {
-//       const searchLower = search.toLowerCase();
-//       filtered = filtered.filter(
-//         (conv) =>
-//           conv.user_profiles?.display_name
-//             ?.toLowerCase()
-//             .includes(searchLower) ||
-//           conv.user_profiles?.email?.toLowerCase().includes(searchLower) ||
-//           conv.fictional_profiles?.display_name
-//             ?.toLowerCase()
-//             .includes(searchLower),
-//       );
-//     }
-
-//     console.log(`✅ Found ${filtered.length} conversations`);
-
-//     res.json({
-//       conversations: filtered,
-//       total: filtered.length,
-//       page: parseInt(page),
-//       totalPages: Math.ceil(filtered.length / parseInt(limit)),
-//     });
-//   } catch (err) {
-//     console.error("Conversations API error:", err);
-//     res.status(500).json({ error: err.message });
-//   }
-// });
-
 // Get operators list with search and operator_type filter
 app.get("/manager/conversations", async (req, res) => {
   try {
@@ -3171,7 +2987,7 @@ app.get("/manager/conversations", async (req, res) => {
     if (userIds.length > 0) {
       const { data: users } = await supabase
         .from("user_profiles")
-        .select("id, display_name, email, country")
+        .select("*")
         .in("id", userIds);
       users?.forEach((u) => userMap.set(u.id, u));
     }
@@ -3179,7 +2995,7 @@ app.get("/manager/conversations", async (req, res) => {
     if (fictionalIds.length > 0) {
       const { data: fictionals } = await supabase
         .from("fictional_profiles")
-        .select("id, display_name, country")
+        .select("*")
         .in("id", fictionalIds);
       fictionals?.forEach((f) => fictionalMap.set(f.id, f));
     }
