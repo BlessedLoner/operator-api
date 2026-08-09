@@ -4862,33 +4862,51 @@ app.get("/admin/states", async (req, res) => {
       return res.status(400).json({ error: "country_code is required" });
     }
 
+    // Get all states for the country
     const { data, error } = await supabase
       .from("states")
       .select(
         `
         id,
         state_name,
-        country_code,
-        created_at
+        country_code
       `,
       )
       .eq("country_code", country_code)
       .order("state_name");
 
-    if (error) throw error;
+    if (error) {
+      console.error("Supabase error:", error);
+      return res.status(500).json({ error: error.message });
+    }
+
+    if (!data || data.length === 0) {
+      return res.json({ states: [] });
+    }
 
     // Get city count for each state
     const statesWithCount = await Promise.all(
-      (data || []).map(async (state) => {
-        const { count } = await supabase
-          .from("cities")
-          .select("id", { count: "exact", head: true })
-          .eq("state_id", state.id);
+      data.map(async (state) => {
+        try {
+          const { count, error: countError } = await supabase
+            .from("cities")
+            .select("id", { count: "exact", head: true })
+            .eq("state_id", state.id);
 
-        return {
-          ...state,
-          city_count: count || 0,
-        };
+          return {
+            ...state,
+            city_count: count || 0,
+          };
+        } catch (countErr) {
+          console.error(
+            `Error counting cities for state ${state.id}:`,
+            countErr,
+          );
+          return {
+            ...state,
+            city_count: 0,
+          };
+        }
       }),
     );
 
@@ -5076,6 +5094,7 @@ app.post("/admin/states", async (req, res) => {
         .json({ error: "State already exists in this country" });
     }
 
+    // ✅ Insert without created_at (let DB handle default if exists)
     const { data, error } = await supabase
       .from("states")
       .insert({
