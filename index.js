@@ -4849,6 +4849,300 @@ app.get(
   },
 );
 
+// =============================================
+// CITY MANAGEMENT API ENDPOINTS
+// =============================================
+
+// ✅ Get all states for a country
+app.get("/admin/states", async (req, res) => {
+  try {
+    const { country_code } = req.query;
+
+    if (!country_code) {
+      return res.status(400).json({ error: "country_code is required" });
+    }
+
+    const { data, error } = await supabase
+      .from("states")
+      .select(
+        `
+        id,
+        state_name,
+        country_code,
+        created_at
+      `,
+      )
+      .eq("country_code", country_code)
+      .order("state_name");
+
+    if (error) throw error;
+
+    // Get city count for each state
+    const statesWithCount = await Promise.all(
+      (data || []).map(async (state) => {
+        const { count } = await supabase
+          .from("cities")
+          .select("id", { count: "exact", head: true })
+          .eq("state_id", state.id);
+
+        return {
+          ...state,
+          city_count: count || 0,
+        };
+      }),
+    );
+
+    res.json({ states: statesWithCount });
+  } catch (err) {
+    console.error("Error fetching states:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Get cities for a specific state
+app.get("/admin/cities", async (req, res) => {
+  try {
+    const { state_id } = req.query;
+
+    if (!state_id) {
+      return res.status(400).json({ error: "state_id is required" });
+    }
+
+    const { data, error } = await supabase
+      .from("cities")
+      .select("*")
+      .eq("state_id", state_id)
+      .order("city_name");
+
+    if (error) throw error;
+
+    res.json({ cities: data || [] });
+  } catch (err) {
+    console.error("Error fetching cities:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Add a new city
+app.post("/admin/cities", async (req, res) => {
+  try {
+    const { state_id, city_name, latitude, longitude } = req.body;
+
+    if (!state_id || !city_name) {
+      return res
+        .status(400)
+        .json({ error: "state_id and city_name are required" });
+    }
+
+    // Check if city already exists
+    const { data: existing } = await supabase
+      .from("cities")
+      .select("id")
+      .eq("state_id", state_id)
+      .ilike("city_name", city_name)
+      .maybeSingle();
+
+    if (existing) {
+      return res
+        .status(400)
+        .json({ error: "City already exists in this state" });
+    }
+
+    const { data, error } = await supabase
+      .from("cities")
+      .insert({
+        state_id,
+        city_name: city_name.trim(),
+        latitude: latitude ? parseFloat(latitude) : null,
+        longitude: longitude ? parseFloat(longitude) : null,
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ success: true, city: data });
+  } catch (err) {
+    console.error("Error adding city:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Add multiple cities at once (bulk)
+app.post("/admin/cities/bulk", async (req, res) => {
+  try {
+    const { state_id, cities } = req.body;
+
+    if (!state_id || !cities || !Array.isArray(cities) || cities.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "state_id and cities array are required" });
+    }
+
+    const citiesToInsert = cities.map((city) => ({
+      state_id,
+      city_name: city.city_name.trim(),
+      latitude: city.latitude ? parseFloat(city.latitude) : null,
+      longitude: city.longitude ? parseFloat(city.longitude) : null,
+    }));
+
+    const { data, error } = await supabase
+      .from("cities")
+      .insert(citiesToInsert)
+      .select();
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      added: data.length,
+      cities: data,
+    });
+  } catch (err) {
+    console.error("Error bulk adding cities:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Update a city
+app.put("/admin/cities/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { city_name, latitude, longitude } = req.body;
+
+    if (!city_name) {
+      return res.status(400).json({ error: "city_name is required" });
+    }
+
+    const { data, error } = await supabase
+      .from("cities")
+      .update({
+        city_name: city_name.trim(),
+        latitude: latitude ? parseFloat(latitude) : null,
+        longitude: longitude ? parseFloat(longitude) : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ success: true, city: data });
+  } catch (err) {
+    console.error("Error updating city:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Delete a city
+app.delete("/admin/cities/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { error } = await supabase.from("cities").delete().eq("id", id);
+
+    if (error) throw error;
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error deleting city:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Add a new state
+app.post("/admin/states", async (req, res) => {
+  try {
+    const { country_code, state_name } = req.body;
+
+    if (!country_code || !state_name) {
+      return res
+        .status(400)
+        .json({ error: "country_code and state_name are required" });
+    }
+
+    // Check if state already exists
+    const { data: existing } = await supabase
+      .from("states")
+      .select("id")
+      .eq("country_code", country_code)
+      .ilike("state_name", state_name)
+      .maybeSingle();
+
+    if (existing) {
+      return res
+        .status(400)
+        .json({ error: "State already exists in this country" });
+    }
+
+    const { data, error } = await supabase
+      .from("states")
+      .insert({
+        country_code,
+        state_name: state_name.trim(),
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ success: true, state: data });
+  } catch (err) {
+    console.error("Error adding state:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Update a state
+app.put("/admin/states/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { state_name } = req.body;
+
+    if (!state_name) {
+      return res.status(400).json({ error: "state_name is required" });
+    }
+
+    const { data, error } = await supabase
+      .from("states")
+      .update({
+        state_name: state_name.trim(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ success: true, state: data });
+  } catch (err) {
+    console.error("Error updating state:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ✅ Delete a state (and all its cities)
+app.delete("/admin/states/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // First, delete all cities in this state
+    await supabase.from("cities").delete().eq("state_id", id);
+
+    // Then delete the state
+    const { error } = await supabase.from("states").delete().eq("id", id);
+
+    if (error) throw error;
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error deleting state:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==========================
 // STRIPE ROUTES
 // ==========================
