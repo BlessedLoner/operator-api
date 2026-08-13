@@ -127,6 +127,13 @@ app.post("/user/send-message", async (req, res) => {
         .update({ expires_at: newExpiresAt.toISOString() })
         .eq("id", existingAssignment.id);
 
+      await supabase
+        .from("conversations")
+        .update({
+          stopped_attempts: 0,
+        })
+        .eq("id", conversation_id);
+
       return res.json({
         success: true,
         message,
@@ -135,6 +142,8 @@ app.post("/user/send-message", async (req, res) => {
       });
     }
 
+    // 🚫 Remove this conversation from the stopped queue
+    // because the REAL USER has responded.
     await supabase
       .from("stopped_queue")
       .update({
@@ -145,6 +154,24 @@ app.post("/user/send-message", async (req, res) => {
       })
       .eq("conversation_id", conversation_id)
       .in("status", ["pending", "assigned"]);
+
+    // 🔄 IMPORTANT:
+    // The user has returned, so reset the stopped re-engagement count.
+    // This gives the conversation a fresh opportunity to enter the
+    // stopped queue again in the future.
+    const { error: resetStoppedError } = await supabase
+      .from("conversations")
+      .update({
+        stopped_attempts: 0,
+      })
+      .eq("id", conversation_id);
+
+    if (resetStoppedError) {
+      console.error(
+        "❌ Failed to reset stopped re-engagement count:",
+        resetStoppedError,
+      );
+    }
 
     // ❌ No active assignment - check for ANY active queue row
     const { data: activeQueue } = await supabase
@@ -2621,6 +2648,8 @@ app.post("/poker/release-user", async (req, res) => {
 // ==========================
 
 // In server/index.js - Add endpoint for stopped operators to send messages
+
+// Send re-engagement message from stopped operator
 app.post("/stopped/send-message", async (req, res) => {
   try {
     const {
@@ -2639,10 +2668,14 @@ app.post("/stopped/send-message", async (req, res) => {
       !content ||
       !operator_id
     ) {
-      return res.status(400).json({ error: "Missing required fields" });
+      return res.status(400).json({
+        error: "Missing required fields",
+      });
     }
 
-    // Insert the message
+    // ------------------------------------------------------------
+    // 1. Insert the stopped/re-engagement message
+    // ------------------------------------------------------------
     const { data: message, error: insertError } = await supabase
       .from("messages")
       .insert({
@@ -2654,46 +2687,94 @@ app.post("/stopped/send-message", async (req, res) => {
         direction: "fictional_to_user",
         credit_cost: 0,
         operator_id: operator_id,
-        is_reengagement: true, // Mark as re-engagement message
+        is_reengagement: true,
       })
       .select()
       .single();
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      console.error("❌ Stopped message insert error:", insertError);
+      throw insertError;
+    }
 
-    // Update conversation last message
-    await supabase
-      .from("conversations")
-      .update({
-        last_message_at: message.created_at,
-        last_message_sender_id: fictional_profile_id,
-        last_message_preview: content.substring(0, 50),
-      })
-      .eq("id", conversation_id);
+    console.log(`✅ Stopped message inserted: ${message.id}`);
 
-    // Mark queue item as completed
+    // ------------------------------------------------------------
+    // 2. Increment stopped_attempts
+    //
+    // IMPORTANT:
+    // We only do this AFTER the message was successfully inserted.
+    // Therefore, merely entering the stopped queue does NOT consume
+    // one of the two attempts.
+    // ------------------------------------------------------------
+    const { data: updatedConversation, error: conversationError } =
+      await supabase
+        .from("conversations")
+        .update({
+          last_message_at: message.created_at,
+          last_message_sender_id: fictional_profile_id,
+          last_message_preview: content.substring(0, 50),
+        })
+        .eq("id", conversation_id)
+        .select("id, stopped_attempts")
+        .single();
+
+    if (conversationError) {
+      console.error("❌ Conversation update error:", conversationError);
+      throw conversationError;
+    }
+
+    // ------------------------------------------------------------
+    // 3. Increment the stopped attempt counter
+    // ------------------------------------------------------------
+    //
+    // We use a Postgres RPC so the increment happens atomically.
+    //
+    const { data: attemptData, error: attemptError } = await supabase.rpc(
+      "increment_stopped_attempts",
+      {
+        p_conversation_id: conversation_id,
+      },
+    );
+
+    if (attemptError) {
+      console.error("❌ Failed to increment stopped_attempts:", attemptError);
+      throw attemptError;
+    }
+
+    console.log(
+      `🔄 Conversation ${conversation_id} stopped attempt #${attemptData}`,
+    );
+
+    // ------------------------------------------------------------
+    // 4. Remove completed stopped queue item
+    // ------------------------------------------------------------
     const { error: completeError } = await supabase
       .from("stopped_queue")
       .delete()
       .eq("id", queue_id);
 
-    // await supabase
-    //   .from("stopped_queue")
-    //   .update({
-    //     status: "completed",
-    //     assigned_operator_id: null,
-    //     assigned_at: null,
-    //     expires_at: null,
-    //   })
-    //   .eq("id", queue_id);
-
     if (completeError) {
+      console.error("❌ Failed to remove stopped queue item:", completeError);
       throw completeError;
     }
-    res.json({ success: true, message });
+
+    console.log(`✅ Stopped queue item ${queue_id} completed`);
+
+    // ------------------------------------------------------------
+    // 5. Return success
+    // ------------------------------------------------------------
+    res.json({
+      success: true,
+      message,
+      stopped_attempts: attemptData,
+    });
   } catch (err) {
-    console.error("Send message error:", err);
-    res.status(500).json({ error: err.message });
+    console.error("❌ Send stopped message error:", err);
+
+    res.status(500).json({
+      error: err.message,
+    });
   }
 });
 
