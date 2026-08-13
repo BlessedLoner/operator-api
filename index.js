@@ -2008,68 +2008,143 @@ app.post("/operator/heartbeat", async (req, res) => {
 // ==========================
 // SMART FICTIONAL PROFILE SELECTOR FOR POKERS
 // ==========================
-// Returns up to 10 good matches
+// ==========================
+// SMART FICTIONAL PROFILE SELECTOR FOR POKERS
+// ==========================
+
 async function getSuggestedFictionalProfiles(user) {
-  let query = supabase
-    .from("fictional_profiles")
-    .select("*")
-    .eq("is_deleted", false);
+  try {
+    // Start with all active profiles
+    let query = supabase
+      .from("fictional_profiles")
+      .select("*")
+      .eq("is_deleted", false);
 
-  // Same country first
-  if (user.user_country) {
-    query = query.eq("country", user.user_country);
-  }
+    // Filter by country first
+    if (user.user_country) {
+      query = query.eq("country", user.user_country);
+    }
 
-  const { data, error } = await query;
+    const { data, error } = await query;
 
-  if (error) throw error;
+    if (error) throw error;
 
-  if (!data?.length) return [];
+    if (!data?.length) return [];
 
-  let matches = [...data];
+    // Score each profile based on matches
+    const scoredProfiles = data.map((profile) => {
+      let score = 0;
+      let matchReasons = [];
 
-  // City bonus
-  if (user.user_city) {
-    matches.sort((a, b) => {
-      const aScore =
-        (a.city || "").toLowerCase() === user.user_city.toLowerCase() ? 1 : 0;
-      const bScore =
-        (b.city || "").toLowerCase() === user.user_city.toLowerCase() ? 1 : 0;
+      // ✅ 1. Same State (MOST IMPORTANT - +50 points)
+      if (user.user_state && profile.state) {
+        const userState = user.user_state.toLowerCase().trim();
+        const profileState = profile.state.toLowerCase().trim();
+        if (userState === profileState) {
+          score += 50;
+          matchReasons.push("Same state");
+        }
+      }
 
-      return bScore - aScore;
+      // ✅ 2. Same City (VERY IMPORTANT - +40 points)
+      if (user.user_city && profile.city) {
+        const userCity = user.user_city.toLowerCase().trim();
+        const profileCity = profile.city.toLowerCase().trim();
+        if (userCity === profileCity) {
+          score += 40;
+          matchReasons.push("Same city");
+        } else if (
+          userCity.includes(profileCity) ||
+          profileCity.includes(userCity)
+        ) {
+          score += 20;
+          matchReasons.push("Nearby city");
+        }
+      }
+
+      // ✅ 3. Matching Interests (IMPORTANT - +30 points per match)
+      if (user.user_interests?.length && profile.interests?.length) {
+        const userInterests = user.user_interests.map((i) =>
+          i.toLowerCase().trim(),
+        );
+        const profileInterests = profile.interests.map((i) =>
+          i.toLowerCase().trim(),
+        );
+
+        const matchedInterests = userInterests.filter((i) =>
+          profileInterests.some(
+            (pi) => pi === i || pi.includes(i) || i.includes(pi),
+          ),
+        );
+
+        if (matchedInterests.length > 0) {
+          score += Math.min(matchedInterests.length * 30, 50); // Cap at 50
+          matchReasons.push(`${matchedInterests.length} matching interest(s)`);
+        }
+      }
+
+      // ✅ 4. Age Similarity (MODERATE - +10-25 points)
+      if (user.user_age && profile.age) {
+        const ageDiff = Math.abs(profile.age - user.user_age);
+        if (ageDiff <= 2) {
+          score += 25;
+          matchReasons.push("Age match (±2 yrs)");
+        } else if (ageDiff <= 5) {
+          score += 15;
+          matchReasons.push("Age match (±5 yrs)");
+        } else if (ageDiff <= 10) {
+          score += 8;
+          matchReasons.push("Age match (±10 yrs)");
+        }
+      }
+
+      // ✅ 5. Gender Match (Bonus if user has lookingFor and profile matches)
+      if (user.user_gender && profile.gender) {
+        if (user.user_gender.toLowerCase() === profile.gender.toLowerCase()) {
+          score += 5;
+        }
+      }
+
+      // ✅ 6. Complete Profile Bonus (Has image and bio)
+      if (profile.image_url) score += 5;
+      if (profile.bio && profile.bio.length > 20) score += 3;
+
+      // ✅ 7. Random factor (to break ties and add variety)
+      score += Math.random() * 3;
+
+      return {
+        ...profile,
+        score,
+        matchReasons: matchReasons.slice(0, 3), // Keep top 3 reasons
+      };
     });
+
+    // Sort by score (highest first)
+    scoredProfiles.sort((a, b) => b.score - a.score);
+
+    // Take top 20 candidates, then shuffle slightly for variety
+    const topCandidates = scoredProfiles.slice(0, 20);
+
+    // Shuffle the top 20 slightly (to avoid showing the exact same order every time)
+    for (let i = topCandidates.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [topCandidates[i], topCandidates[j]] = [
+        topCandidates[j],
+        topCandidates[i],
+      ];
+    }
+
+    // Return top 10 suggestions
+    return topCandidates.slice(0, 10);
+  } catch (err) {
+    console.error("Error getting suggestions:", err);
+    return [];
   }
-
-  // State bonus
-  if (user.user_state) {
-    matches.sort((a, b) => {
-      const aScore =
-        (a.state || "").toLowerCase() === user.user_state.toLowerCase() ? 1 : 0;
-      const bScore =
-        (b.state || "").toLowerCase() === user.user_state.toLowerCase() ? 1 : 0;
-
-      return bScore - aScore;
-    });
-  }
-
-  // Age similarity
-  if (user.user_age) {
-    matches.sort((a, b) => {
-      const da = Math.abs((a.age || 25) - user.user_age);
-      const db = Math.abs((b.age || 25) - user.user_age);
-      return da - db;
-    });
-  }
-
-  // Shuffle top candidates
-  matches = matches.slice(0, 20).sort(() => Math.random() - 0.5);
-
-  return matches.slice(0, 10);
 }
 
-// Smart fictional profile selector for pokers - matches by country, city, interests
+// Smart fictional profile selector for pokers
 async function selectBestFictionalProfile(user) {
-  // If user already liked someone, always suggest that person first.
+  // ✅ PRIORITY 1: If user liked someone, show that profile first
   if (user.liked_fictional_ids?.length) {
     const { data, error } = await supabase
       .from("fictional_profiles")
@@ -2077,191 +2152,163 @@ async function selectBestFictionalProfile(user) {
       .in("id", user.liked_fictional_ids)
       .eq("is_deleted", false);
 
-    if (error) throw error;
+    if (error) {
+      console.error("Error fetching liked profiles:", error);
+    } else if (data?.length) {
+      console.log(
+        `✅ User liked ${data.length} profiles, using them as suggestions`,
+      );
 
-    if (data?.length) {
+      // Get additional suggestions to fill up to 10
+      const suggestions = await getSuggestedFictionalProfiles(user);
+
+      // Combine liked profiles with suggestions (remove duplicates)
+      const likedIds = new Set(data.map((p) => p.id));
+      const combined = [...data];
+
+      for (const profile of suggestions) {
+        if (!likedIds.has(profile.id) && combined.length < 10) {
+          combined.push(profile);
+        }
+      }
+
       return {
-        bestProfile: data[0],
-        suggestions: data,
+        bestProfile: data[0], // First liked profile as default
+        suggestions: combined,
+        matchCriteria: "Liked profile",
       };
     }
   }
 
-  // Otherwise generate suggestions
-
+  // ✅ PRIORITY 2: Get suggestions based on state, city, interests, age
   const suggestions = await getSuggestedFictionalProfiles(user);
 
   if (!suggestions.length) {
+    console.log("⚠️ No suggestions found for user");
     return {
       bestProfile: null,
       suggestions: [],
     };
   }
 
-  // Random default selection from suggestions
-
+  // Select the highest scored profile as default
   const bestProfile =
+    suggestions[0] ||
     suggestions[Math.floor(Math.random() * suggestions.length)];
+
+  console.log(
+    `🎯 Selected best profile: ${bestProfile.display_name} (Score: ${bestProfile.score || 0})`,
+  );
+  console.log(
+    `📊 Match reasons: ${bestProfile.matchReasons?.join(", ") || "N/A"}`,
+  );
 
   return {
     bestProfile,
     suggestions,
+    matchCriteria:
+      bestProfile.matchReasons?.join(", ") || "Based on profile matching",
   };
 }
+// // Returns up to 10 good matches
+// async function getSuggestedFictionalProfiles(user) {
+//   let query = supabase
+//     .from("fictional_profiles")
+//     .select("*")
+//     .eq("is_deleted", false);
+
+//   // Same country first
+//   if (user.user_country) {
+//     query = query.eq("country", user.user_country);
+//   }
+
+//   const { data, error } = await query;
+
+//   if (error) throw error;
+
+//   if (!data?.length) return [];
+
+//   let matches = [...data];
+
+//   // City bonus
+//   if (user.user_city) {
+//     matches.sort((a, b) => {
+//       const aScore =
+//         (a.city || "").toLowerCase() === user.user_city.toLowerCase() ? 1 : 0;
+//       const bScore =
+//         (b.city || "").toLowerCase() === user.user_city.toLowerCase() ? 1 : 0;
+
+//       return bScore - aScore;
+//     });
+//   }
+
+//   // State bonus
+//   if (user.user_state) {
+//     matches.sort((a, b) => {
+//       const aScore =
+//         (a.state || "").toLowerCase() === user.user_state.toLowerCase() ? 1 : 0;
+//       const bScore =
+//         (b.state || "").toLowerCase() === user.user_state.toLowerCase() ? 1 : 0;
+
+//       return bScore - aScore;
+//     });
+//   }
+
+//   // Age similarity
+//   if (user.user_age) {
+//     matches.sort((a, b) => {
+//       const da = Math.abs((a.age || 25) - user.user_age);
+//       const db = Math.abs((b.age || 25) - user.user_age);
+//       return da - db;
+//     });
+//   }
+
+//   // Shuffle top candidates
+//   matches = matches.slice(0, 20).sort(() => Math.random() - 0.5);
+
+//   return matches.slice(0, 10);
+// }
+
+// // Smart fictional profile selector for pokers - matches by country, city, interests
 // async function selectBestFictionalProfile(user) {
-//   console.log("🎯 Selecting best fictional profile for user:", {
-//     country: user.user_country,
-//     city: user.user_city,
-//     interests: user.user_interests,
-//   });
-
-//   // Priority 1: User liked a specific fictional profile
-//   if (user.liked_fictional_ids && user.liked_fictional_ids.length > 0) {
-//     console.log(
-//       "📌 Priority 1: User liked specific profiles:",
-//       user.liked_fictional_ids,
-//     );
-
+//   // If user already liked someone, always suggest that person first.
+//   if (user.liked_fictional_ids?.length) {
 //     const { data, error } = await supabase
 //       .from("fictional_profiles")
 //       .select("*")
 //       .in("id", user.liked_fictional_ids)
-//       .eq("is_deleted", false)
-//       .limit(1);
-
-//     if (data && data.length > 0) {
-//       console.log(
-//         "✅ Using liked profile:",
-//         data[0].display_name,
-//         "from",
-//         data[0].country,
-//       );
-//       return data[0];
-//     }
-//   }
-
-//   // Priority 2: Match by country AND city
-//   if (user.user_country && user.user_city) {
-//     console.log(
-//       "📍 Priority 2: Searching by country AND city:",
-//       user.user_country,
-//       user.user_city,
-//     );
-
-//     const { data, error } = await supabase
-//       .from("fictional_profiles")
-//       .select("*")
-//       .eq("country", user.user_country)
-//       .ilike("city", `%${user.user_city}%`)
-//       .eq("is_deleted", false)
-//       .limit(1);
-
-//     if (data && data.length > 0) {
-//       console.log("✅ Found by city match:", data[0].display_name);
-//       return data[0];
-//     }
-//   }
-
-//   // Priority 3: Match by country AND state
-//   if (user.user_country && user.user_state) {
-//     console.log(
-//       "📍 Priority 3: Searching by country AND state:",
-//       user.user_country,
-//       user.user_state,
-//     );
-
-//     const { data, error } = await supabase
-//       .from("fictional_profiles")
-//       .select("*")
-//       .eq("country", user.user_country)
-//       .ilike("state", `%${user.user_state}%`)
-//       .eq("is_deleted", false)
-//       .limit(1);
-
-//     if (data && data.length > 0) {
-//       console.log("✅ Found by state match:", data[0].display_name);
-//       return data[0];
-//     }
-//   }
-
-//   // Priority 4: Match by country AND interests (at least one shared interest)
-//   if (
-//     user.user_country &&
-//     user.user_interests &&
-//     user.user_interests.length > 0
-//   ) {
-//     console.log(
-//       "🎨 Priority 4: Searching by country AND interests:",
-//       user.user_country,
-//     );
-
-//     // Get fictional profiles from same country
-//     const { data, error } = await supabase
-//       .from("fictional_profiles")
-//       .select("*")
-//       .eq("country", user.user_country)
 //       .eq("is_deleted", false);
 
-//     if (data && data.length > 0) {
-//       // Find profiles that share at least one interest
-//       const userInterestsSet = new Set(
-//         user.user_interests.map((i) => i.toLowerCase().trim()),
-//       );
+//     if (error) throw error;
 
-//       const matchedProfiles = data.filter((profile) => {
-//         if (!profile.interests || profile.interests.length === 0) return false;
-//         const profileInterests = profile.interests.map((i) =>
-//           i.toLowerCase().trim(),
-//         );
-//         return profileInterests.some((interest) =>
-//           userInterestsSet.has(interest),
-//         );
-//       });
-
-//       if (matchedProfiles.length > 0) {
-//         console.log(
-//           "✅ Found by interest match:",
-//           matchedProfiles[0].display_name,
-//         );
-//         return matchedProfiles[0];
-//       }
-
-//       // If no interest match, return any profile from same country
-//       console.log(
-//         "✅ Using any profile from same country:",
-//         data[0].display_name,
-//       );
-//       return data[0];
+//     if (data?.length) {
+//       return {
+//         bestProfile: data[0],
+//         suggestions: data,
+//       };
 //     }
 //   }
 
-//   // Priority 5: Match by country only
-//   if (user.user_country) {
-//     console.log("🌍 Priority 5: Searching by country only:", user.user_country);
+//   // Otherwise generate suggestions
 
-//     const { data, error } = await supabase
-//       .from("fictional_profiles")
-//       .select("*")
-//       .eq("country", user.user_country)
-//       .eq("is_deleted", false)
-//       .limit(1);
+//   const suggestions = await getSuggestedFictionalProfiles(user);
 
-//     if (data && data.length > 0) {
-//       console.log("✅ Found by country match:", data[0].display_name);
-//       return data[0];
-//     }
+//   if (!suggestions.length) {
+//     return {
+//       bestProfile: null,
+//       suggestions: [],
+//     };
 //   }
 
-//   // Priority 6: Fallback to any available fictional profile
-//   console.log("⚠️ No matching profile found, using fallback");
-//   const { data, error } = await supabase
-//     .from("fictional_profiles")
-//     .select("*")
-//     .eq("is_deleted", false)
-//     .limit(1);
+//   // Random default selection from suggestions
 
-//   console.log("✅ Fallback profile:", data?.[0]?.display_name);
-//   return data?.[0] || null;
+//   const bestProfile =
+//     suggestions[Math.floor(Math.random() * suggestions.length)];
+
+//   return {
+//     bestProfile,
+//     suggestions,
+//   };
 // }
 
 // ==========================
@@ -2285,6 +2332,7 @@ if (expiredUsers && expiredUsers.length > 0) {
   console.log(`🧹 Cleaned up ${expiredUsers.length} expired assignments`);
 }
 
+// Get next user for poker
 // Get next user for poker
 app.get("/poker/next-user", async (req, res) => {
   try {
@@ -2317,15 +2365,19 @@ app.get("/poker/next-user", async (req, res) => {
     if (assignedError) throw assignedError;
 
     if (assigned) {
-      // Get selected fictional profile
-      const { bestProfile, suggestions } = await selectBestFictionalProfile({
-        liked_fictional_ids: assigned.liked_fictional_ids,
-        user_interests: assigned.user_interests,
+      // ✅ Use smart selection for assigned user
+      const userData = {
         user_country: assigned.user_country,
-        user_city: assigned.user_city,
         user_state: assigned.user_state,
+        user_city: assigned.user_city,
         user_age: assigned.user_age,
-      });
+        user_interests: assigned.user_interests,
+        user_gender: assigned.user_gender,
+        liked_fictional_ids: assigned.liked_fictional_ids,
+      };
+
+      const { bestProfile, suggestions, matchCriteria } =
+        await selectBestFictionalProfile(userData);
 
       return res.json({
         hasUser: true,
@@ -2336,13 +2388,16 @@ app.get("/poker/next-user", async (req, res) => {
           display_name: assigned.user_display_name,
           age: assigned.user_age,
           country: assigned.user_country,
+          state: assigned.user_state,
           city: assigned.user_city,
           interests: assigned.user_interests,
+          gender: assigned.user_gender,
           liked_fictional_ids: assigned.liked_fictional_ids,
           liked_fictional_names: assigned.liked_fictional_names,
         },
         suggestedFictional: bestProfile,
         suggestedProfiles: suggestions,
+        matchCriteria: matchCriteria,
         expiresAt: assigned.expires_at,
       });
     }
@@ -2362,15 +2417,19 @@ app.get("/poker/next-user", async (req, res) => {
       return res.json({ hasUser: false, message: "No new users available" });
     }
 
-    // Select best fictional profile for this user
-    const { bestProfile, suggestions } = await selectBestFictionalProfile({
-      liked_fictional_ids: pending.liked_fictional_ids,
-      user_interests: pending.user_interests,
+    // ✅ Use smart selection for the pending user
+    const userData = {
       user_country: pending.user_country,
-      user_city: pending.user_city,
       user_state: pending.user_state,
+      user_city: pending.user_city,
       user_age: pending.user_age,
-    });
+      user_interests: pending.user_interests,
+      user_gender: pending.user_gender,
+      liked_fictional_ids: pending.liked_fictional_ids,
+    };
+
+    const { bestProfile, suggestions, matchCriteria } =
+      await selectBestFictionalProfile(userData);
 
     if (!bestProfile) {
       return res.json({
@@ -2398,7 +2457,7 @@ app.get("/poker/next-user", async (req, res) => {
 
     if (updateError) throw updateError;
 
-    return res.json({
+    res.json({
       hasUser: true,
       type: "new",
       queueId: updated.id,
@@ -2407,13 +2466,16 @@ app.get("/poker/next-user", async (req, res) => {
         display_name: updated.user_display_name,
         age: updated.user_age,
         country: updated.user_country,
+        state: updated.user_state,
         city: updated.user_city,
         interests: updated.user_interests,
+        gender: updated.user_gender,
         liked_fictional_ids: updated.liked_fictional_ids,
         liked_fictional_names: updated.liked_fictional_names,
       },
       suggestedFictional: bestProfile,
       suggestedProfiles: suggestions,
+      matchCriteria: matchCriteria,
       expiresAt: expiresAt.toISOString(),
     });
   } catch (err) {
@@ -2421,6 +2483,141 @@ app.get("/poker/next-user", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// app.get("/poker/next-user", async (req, res) => {
+//   try {
+//     const { operator_id } = req.query;
+
+//     if (!operator_id) {
+//       return res.status(400).json({ error: "Missing operator_id" });
+//     }
+
+//     // Check if operator is a poker
+//     const { data: operator, error: opError } = await supabase
+//       .from("operator_accounts")
+//       .select("operator_type")
+//       .eq("id", operator_id)
+//       .single();
+
+//     if (opError || !operator || operator.operator_type !== "poke") {
+//       return res.status(403).json({ error: "Not authorized as poker" });
+//     }
+
+//     // Check if poker has an assigned user
+//     const { data: assigned, error: assignedError } = await supabase
+//       .from("poke_queue")
+//       .select("*")
+//       .eq("assigned_poker_id", operator_id)
+//       .eq("status", "assigned")
+//       .gte("expires_at", new Date().toISOString())
+//       .maybeSingle();
+
+//     if (assignedError) throw assignedError;
+
+//     if (assigned) {
+//       // Get selected fictional profile
+//       const { bestProfile, suggestions } = await selectBestFictionalProfile({
+//         liked_fictional_ids: assigned.liked_fictional_ids,
+//         user_interests: assigned.user_interests,
+//         user_country: assigned.user_country,
+//         user_city: assigned.user_city,
+//         user_state: assigned.user_state,
+//         user_age: assigned.user_age,
+//       });
+
+//       return res.json({
+//         hasUser: true,
+//         type: "assigned",
+//         queueId: assigned.id,
+//         user: {
+//           id: assigned.user_profile_id,
+//           display_name: assigned.user_display_name,
+//           age: assigned.user_age,
+//           country: assigned.user_country,
+//           city: assigned.user_city,
+//           interests: assigned.user_interests,
+//           liked_fictional_ids: assigned.liked_fictional_ids,
+//           liked_fictional_names: assigned.liked_fictional_names,
+//         },
+//         suggestedFictional: bestProfile,
+//         suggestedProfiles: suggestions,
+//         expiresAt: assigned.expires_at,
+//       });
+//     }
+
+//     // Get next pending user
+//     const { data: pending, error: pendingError } = await supabase
+//       .from("poke_queue")
+//       .select("*")
+//       .eq("status", "pending")
+//       .order("created_at", { ascending: true })
+//       .limit(1)
+//       .maybeSingle();
+
+//     if (pendingError) throw pendingError;
+
+//     if (!pending) {
+//       return res.json({ hasUser: false, message: "No new users available" });
+//     }
+
+//     // Select best fictional profile for this user
+//     const { bestProfile, suggestions } = await selectBestFictionalProfile({
+//       liked_fictional_ids: pending.liked_fictional_ids,
+//       user_interests: pending.user_interests,
+//       user_country: pending.user_country,
+//       user_city: pending.user_city,
+//       user_state: pending.user_state,
+//       user_age: pending.user_age,
+//     });
+
+//     if (!bestProfile) {
+//       return res.json({
+//         hasUser: false,
+//         message: "No fictional profiles available",
+//       });
+//     }
+
+//     // Assign user to this poker with 5-minute lock
+//     const expiresAt = new Date();
+//     expiresAt.setMinutes(expiresAt.getMinutes() + 5);
+
+//     const { data: updated, error: updateError } = await supabase
+//       .from("poke_queue")
+//       .update({
+//         status: "assigned",
+//         assigned_poker_id: operator_id,
+//         assigned_at: new Date().toISOString(),
+//         expires_at: expiresAt.toISOString(),
+//       })
+//       .eq("id", pending.id)
+//       .eq("status", "pending")
+//       .select()
+//       .single();
+
+//     if (updateError) throw updateError;
+
+//     return res.json({
+//       hasUser: true,
+//       type: "new",
+//       queueId: updated.id,
+//       user: {
+//         id: updated.user_profile_id,
+//         display_name: updated.user_display_name,
+//         age: updated.user_age,
+//         country: updated.user_country,
+//         city: updated.user_city,
+//         interests: updated.user_interests,
+//         liked_fictional_ids: updated.liked_fictional_ids,
+//         liked_fictional_names: updated.liked_fictional_names,
+//       },
+//       suggestedFictional: bestProfile,
+//       suggestedProfiles: suggestions,
+//       expiresAt: expiresAt.toISOString(),
+//     });
+//   } catch (err) {
+//     console.error("Poker next user error:", err);
+//     res.status(500).json({ error: err.message });
+//   }
+// });
 
 // Send flirt message from poker
 // Send flirt message from poker
