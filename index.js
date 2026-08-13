@@ -6066,7 +6066,6 @@ const cleanupStaleOperators = async () => {
 
 // Run stale operator cleanup every 2 minutes
 setInterval(cleanupStaleOperators, 2 * 60 * 1000);
-des;
 
 app.listen(PORT, () => {
   console.log(`✅ Operator API running on port ${PORT}`);
