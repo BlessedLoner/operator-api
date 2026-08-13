@@ -3357,6 +3357,39 @@ app.get("/manager/conversations", async (req, res) => {
     // ✅ STEP 7: Get full details for paginated conversations
     const conversationsWithDetails = [];
 
+    // ✅ NEW: Get user IDs for credits
+    const paginatedUserIds = paginatedIds
+      .map((id) => {
+        const conv = allConversations.find((c) => c.id === id);
+        return conv?.user_id;
+      })
+      .filter(Boolean);
+
+    // ✅ NEW: Fetch credits for all users in one query
+    let creditsMap = new Map();
+    if (paginatedUserIds.length > 0) {
+      const { data: credits } = await supabase
+        .from("credits")
+        .select("*")
+        .in("user_id", paginatedUserIds);
+      credits?.forEach((c) => creditsMap.set(c.user_id, c));
+    }
+
+    // ✅ NEW: Fetch transactions if you have a transactions table
+    let transactionsMap = new Map();
+    // If you have a transactions table, fetch them here
+    // const { data: transactions } = await supabase
+    //   .from("credit_transactions")
+    //   .select("*")
+    //   .in("user_id", paginatedUserIds)
+    //   .order("created_at", { ascending: false });
+    // transactions?.forEach(tx => {
+    //   if (!transactionsMap.has(tx.user_id)) {
+    //     transactionsMap.set(tx.user_id, []);
+    //   }
+    //   transactionsMap.get(tx.user_id).push(tx);
+    // });
+
     for (const id of paginatedIds) {
       const conv = allConversations.find((c) => c.id === id);
       if (!conv) continue;
@@ -3403,6 +3436,10 @@ app.get("/manager/conversations", async (req, res) => {
         operatorTypeValue = opData?.operator_type;
       }
 
+      // ✅ NEW: Get credits for this user
+      const userCredits = creditsMap.get(conv.user_id) || null;
+      const userTransactions = transactionsMap.get(conv.user_id) || [];
+
       conversationsWithDetails.push({
         id: conv.id,
         created_at: conv.created_at,
@@ -3414,6 +3451,9 @@ app.get("/manager/conversations", async (req, res) => {
         operator: operator,
         operator_type: operatorTypeValue,
         messages: messages || [],
+        // ✅ NEW: Add credits data
+        user_credits: userCredits,
+        transactions: userTransactions,
       });
     }
 
@@ -3432,6 +3472,261 @@ app.get("/manager/conversations", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// app.get("/manager/conversations", async (req, res) => {
+//   try {
+//     const {
+//       country = "all",
+//       page = 1,
+//       limit = 20,
+//       startDate = "",
+//       endDate = "",
+//       search = "",
+//       operator_type = "all",
+//     } = req.query;
+
+//     console.log("📊 Conversations request:", {
+//       country,
+//       page,
+//       limit,
+//       startDate,
+//       endDate,
+//       search,
+//       operator_type,
+//     });
+
+//     const from = (parseInt(page) - 1) * parseInt(limit);
+//     const to = from + parseInt(limit) - 1;
+
+//     // ✅ STEP 1: First, get the conversation IDs that match all filters
+//     let query = supabase
+//       .from("conversations")
+//       .select(
+//         `
+//         id,
+//         created_at,
+//         user_id,
+//         fictional_profile_id
+//       `,
+//         { count: "exact" },
+//       )
+//       .order("created_at", { ascending: false });
+
+//     // Apply date filters
+//     if (startDate) {
+//       const startDateTime = new Date(startDate);
+//       startDateTime.setHours(0, 0, 0, 0);
+//       query = query.gte("created_at", startDateTime.toISOString());
+//     }
+
+//     if (endDate) {
+//       const endDateTime = new Date(endDate);
+//       endDateTime.setHours(23, 59, 59, 999);
+//       query = query.lte("created_at", endDateTime.toISOString());
+//     }
+
+//     // ✅ STEP 2: Get ALL matching conversations (with count)
+//     const { data: allConversations, error, count } = await query;
+
+//     if (error) {
+//       console.error("Conversations error:", error);
+//       return res.status(500).json({ error: error.message });
+//     }
+
+//     if (!allConversations || allConversations.length === 0) {
+//       return res.json({
+//         conversations: [],
+//         total: 0,
+//         page: parseInt(page),
+//         totalPages: 0,
+//       });
+//     }
+
+//     // ✅ STEP 3: Filter conversation IDs based on operator_type, country, search
+//     let filteredIds = allConversations.map((c) => c.id);
+
+//     // Get all users and fictionals for filtering
+//     const userIds = [
+//       ...new Set(allConversations.map((c) => c.user_id).filter(Boolean)),
+//     ];
+//     const fictionalIds = [
+//       ...new Set(
+//         allConversations.map((c) => c.fictional_profile_id).filter(Boolean),
+//       ),
+//     ];
+
+//     let userMap = new Map();
+//     let fictionalMap = new Map();
+
+//     if (userIds.length > 0) {
+//       const { data: users } = await supabase
+//         .from("user_profiles")
+//         .select("*")
+//         .in("id", userIds);
+//       users?.forEach((u) => userMap.set(u.id, u));
+//     }
+
+//     if (fictionalIds.length > 0) {
+//       const { data: fictionals } = await supabase
+//         .from("fictional_profiles")
+//         .select("*")
+//         .in("id", fictionalIds);
+//       fictionals?.forEach((f) => fictionalMap.set(f.id, f));
+//     }
+
+//     // ✅ STEP 4: Get operator type for each conversation
+//     let conversationOperatorMap = new Map();
+//     const convIds = allConversations.map((c) => c.id);
+
+//     if (convIds.length > 0) {
+//       const { data: messages } = await supabase
+//         .from("messages")
+//         .select("conversation_id, operator_id")
+//         .in("conversation_id", convIds)
+//         .eq("sender_type", "fictional")
+//         .order("created_at", { ascending: false });
+
+//       // Get the latest operator for each conversation
+//       const seen = new Set();
+//       messages?.forEach((msg) => {
+//         if (!seen.has(msg.conversation_id) && msg.operator_id) {
+//           seen.add(msg.conversation_id);
+//           conversationOperatorMap.set(msg.conversation_id, msg.operator_id);
+//         }
+//       });
+//     }
+
+//     // Get operator types
+//     const operatorIds = [...new Set(conversationOperatorMap.values())];
+//     let operatorTypeMap = new Map();
+//     if (operatorIds.length > 0) {
+//       const { data: operators } = await supabase
+//         .from("operator_accounts")
+//         .select("id, operator_type")
+//         .in("id", operatorIds);
+//       operators?.forEach((o) => operatorTypeMap.set(o.id, o.operator_type));
+//     }
+
+//     // ✅ STEP 5: Apply filters to determine which conversation IDs to keep
+//     let finalIds = allConversations.map((c) => c.id);
+
+//     // Filter by operator_type
+//     if (operator_type && operator_type !== "all") {
+//       finalIds = finalIds.filter((id) => {
+//         const opId = conversationOperatorMap.get(id);
+//         return opId ? operatorTypeMap.get(opId) === operator_type : false;
+//       });
+//     }
+
+//     // Filter by country
+//     if (country && country !== "all") {
+//       finalIds = finalIds.filter((id) => {
+//         const conv = allConversations.find((c) => c.id === id);
+//         if (!conv) return false;
+//         const user = userMap.get(conv.user_id);
+//         const fictional = fictionalMap.get(conv.fictional_profile_id);
+//         return user?.country === country || fictional?.country === country;
+//       });
+//     }
+
+//     // Filter by search
+//     if (search && search.trim() !== "") {
+//       const searchLower = search.toLowerCase();
+//       finalIds = finalIds.filter((id) => {
+//         const conv = allConversations.find((c) => c.id === id);
+//         if (!conv) return false;
+//         const user = userMap.get(conv.user_id);
+//         const fictional = fictionalMap.get(conv.fictional_profile_id);
+//         return (
+//           user?.display_name?.toLowerCase().includes(searchLower) ||
+//           user?.email?.toLowerCase().includes(searchLower) ||
+//           fictional?.display_name?.toLowerCase().includes(searchLower)
+//         );
+//       });
+//     }
+
+//     // ✅ STEP 6: Paginate the filtered IDs
+//     const totalFiltered = finalIds.length;
+//     const totalPages = Math.ceil(totalFiltered / parseInt(limit));
+//     const paginatedIds = finalIds.slice(from, to);
+
+//     // ✅ STEP 7: Get full details for paginated conversations
+//     const conversationsWithDetails = [];
+
+//     for (const id of paginatedIds) {
+//       const conv = allConversations.find((c) => c.id === id);
+//       if (!conv) continue;
+
+//       const user = userMap.get(conv.user_id);
+//       const fictional = fictionalMap.get(conv.fictional_profile_id);
+
+//       // Get messages
+//       const { data: messages } = await supabase
+//         .from("messages")
+//         .select(
+//           `
+//           *,
+//           operator_accounts!operator_id (
+//             id,
+//             username,
+//             full_name,
+//             operator_type
+//           )
+//         `,
+//         )
+//         .eq("conversation_id", conv.id)
+//         .order("created_at", { ascending: true });
+
+//       // Get latest message
+//       const { data: latestMessage } = await supabase
+//         .from("messages")
+//         .select("id, operator_id, created_at, content")
+//         .eq("conversation_id", conv.id)
+//         .order("created_at", { ascending: false })
+//         .limit(1)
+//         .maybeSingle();
+
+//       let operator = null;
+//       let operatorTypeValue = null;
+
+//       if (latestMessage?.operator_id) {
+//         const { data: opData } = await supabase
+//           .from("operator_accounts")
+//           .select("id, username, full_name, email, operator_type")
+//           .eq("id", latestMessage.operator_id)
+//           .single();
+//         operator = opData;
+//         operatorTypeValue = opData?.operator_type;
+//       }
+
+//       conversationsWithDetails.push({
+//         id: conv.id,
+//         created_at: conv.created_at,
+//         last_message_at: latestMessage?.created_at || conv.created_at,
+//         last_message_preview:
+//           latestMessage?.content?.substring(0, 50) || "No messages",
+//         user_profiles: user,
+//         fictional_profiles: fictional,
+//         operator: operator,
+//         operator_type: operatorTypeValue,
+//         messages: messages || [],
+//       });
+//     }
+
+//     console.log(
+//       `✅ Found ${totalFiltered} conversations, showing page ${page} of ${totalPages}`,
+//     );
+
+//     res.json({
+//       conversations: conversationsWithDetails,
+//       total: totalFiltered,
+//       page: parseInt(page),
+//       totalPages: totalPages,
+//     });
+//   } catch (err) {
+//     console.error("Conversations API error:", err);
+//     res.status(500).json({ error: err.message });
+//   }
+// });
 
 app.get("/manager/operators", async (req, res) => {
   try {
@@ -5771,6 +6066,7 @@ const cleanupStaleOperators = async () => {
 
 // Run stale operator cleanup every 2 minutes
 setInterval(cleanupStaleOperators, 2 * 60 * 1000);
+des;
 
 app.listen(PORT, () => {
   console.log(`✅ Operator API running on port ${PORT}`);
