@@ -941,7 +941,7 @@ app.get("/operator/current-message", async (req, res) => {
       if (userProfile?.id) {
         const { data: credits, error: creditsError } = await supabase
           .from("credits")
-          .select("balance, total_purchased, total_used, updated_at")
+          .select("*")
           .eq("user_id", userProfile.id)
           .maybeSingle();
 
@@ -1084,7 +1084,7 @@ app.post("/operator/assign-next", async (req, res) => {
         if (conversation?.user_profiles?.id) {
           const { data: credits } = await supabase
             .from("credits")
-            .select("balance, total_purchased, total_used, updated_at")
+            .select("*")
             .eq("user_id", conversation.user_profiles.id)
             .maybeSingle();
           userCredits = credits;
