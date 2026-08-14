@@ -1236,6 +1236,25 @@ app.post("/operator/assign-next", async (req, res) => {
         .eq("sender_type", "real_user")
         .order("created_at", { ascending: true });
 
+      // Fetch user's credits
+      let userCredits = null;
+
+      const userProfile = selectedMessage.conversations?.user_profiles;
+
+      if (userProfile?.id) {
+        const { data: credits, error: creditsError } = await supabase
+          .from("credits")
+          .select("balance, total_purchased, total_used, updated_at")
+          .eq("user_id", userProfile.id)
+          .maybeSingle();
+
+        if (creditsError) {
+          console.error("❌ Failed to fetch user credits:", creditsError);
+        } else {
+          userCredits = credits;
+        }
+      }
+
       return res.json({
         assigned: true,
         type: "regular",
@@ -1245,6 +1264,7 @@ app.post("/operator/assign-next", async (req, res) => {
         userProfile: selectedMessage.conversations.user_profiles,
         fictionalProfile: selectedMessage.conversations.fictional_profiles,
         expiresAt: expiresAt.toISOString(),
+        userCredits: userCredits, // ✅ Include user credits in the response
       });
     }
 
