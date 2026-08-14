@@ -1236,15 +1236,18 @@ app.post("/operator/assign-next", async (req, res) => {
         .eq("sender_type", "real_user")
         .order("created_at", { ascending: true });
 
+      if (messagesError) {
+        console.error("❌ Failed to fetch messages:", messagesError);
+      }
+      const userProfile = selectedMessage.conversations?.user_profiles;
+
       // Fetch user's credits
       let userCredits = null;
-
-      const userProfile = selectedMessage.conversations?.user_profiles;
 
       if (userProfile?.id) {
         const { data: credits, error: creditsError } = await supabase
           .from("credits")
-          .select("balance, total_purchased, total_used, updated_at")
+          .select("*")
           .eq("user_id", userProfile.id)
           .maybeSingle();
 
