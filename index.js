@@ -934,6 +934,22 @@ app.get("/operator/current-message", async (req, res) => {
     }
 
     if (queueItem) {
+      // ✅ NEW: Fetch user credits
+      const userProfile = queueItem.conversations?.user_profiles;
+      let userCredits = null;
+
+      if (userProfile?.id) {
+        const { data: credits, error: creditsError } = await supabase
+          .from("credits")
+          .select("balance, total_purchased, total_used, updated_at")
+          .eq("user_id", userProfile.id)
+          .maybeSingle();
+
+        if (!creditsError && credits) {
+          userCredits = credits;
+        }
+      }
+
       // Refresh ownership for current active queue
       await supabase
         .from("conversations")
@@ -972,6 +988,8 @@ app.get("/operator/current-message", async (req, res) => {
         userProfile: queueItem.conversations.user_profiles,
         fictionalProfile: queueItem.conversations.fictional_profiles,
         expiresAt: queueItem.expires_at,
+        // ✅ NEW: Add user credits to response
+        userCredits: userCredits,
       });
     }
 
@@ -1061,6 +1079,17 @@ app.post("/operator/assign-next", async (req, res) => {
           .eq("id", existingAssigned.conversation_id)
           .single();
 
+        // ✅ NEW: Fetch user credits
+        let userCredits = null;
+        if (conversation?.user_profiles?.id) {
+          const { data: credits } = await supabase
+            .from("credits")
+            .select("balance, total_purchased, total_used, updated_at")
+            .eq("user_id", conversation.user_profiles.id)
+            .maybeSingle();
+          userCredits = credits;
+        }
+
         // Get all unread messages for this conversation
         const { data: messages } = await supabase
           .from("messages")
@@ -1079,6 +1108,8 @@ app.post("/operator/assign-next", async (req, res) => {
           userProfile: conversation.user_profiles,
           fictionalProfile: conversation.fictional_profiles,
           expiresAt: existingAssigned.expires_at,
+          // ✅ NEW: Add user credits to response
+          userCredits: userCredits,
         });
       }
 
