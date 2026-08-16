@@ -64,7 +64,15 @@ app.post("/user/send-message", async (req, res) => {
   try {
     const { conversation_id, user_id, content, image_url } = req.body;
 
-    // ✅ FIRST: Check if this conversation already has an ACTIVE assignment (within 5-min lock)
+    // ✅ ALWAYS mask user messages FIRST
+    const { maskedContent, wasMasked, detectionType } = await maskUserMessage(
+      supabase,
+      conversation_id,
+      user_id,
+      content,
+    );
+
+    // Check if this conversation already has an ACTIVE assignment (within 5-min lock)
     const { data: existingAssignment, error: assignError } = await supabase
       .from("message_queue")
       .select("id, assigned_operator_id, status, expires_at")
@@ -86,33 +94,25 @@ app.post("/user/send-message", async (req, res) => {
     };
 
     if (existingAssignment) {
-      // ✅ Conversation already assigned to an operator - just add message, NO new queue item
+      // Conversation already assigned to an operator
       assignedOperatorId = existingAssignment.assigned_operator_id;
       console.log(
         `📨 Message added to existing conversation assigned to operator ${assignedOperatorId}`,
       );
 
-      // Just insert the message - no queue item creation
-      // ✅ NEW: Mask sensitive information BEFORE inserting
-      const { maskedContent, wasMasked, detectionType } = await maskUserMessage(
-        supabase,
-        conversation_id,
-        user_id,
-        content,
-      );
-
+      // Insert masked message
       const { data: message, error: msgError } = await supabase
         .from("messages")
         .insert({
           conversation_id,
           sender_type: "real_user",
           sender_user_id: user_id,
-          content: maskedContent, // ✅ SEND MASKED CONTENT
+          content: maskedContent, // ✅ MASKED
           image_url,
           direction: "user_to_fictional",
           credit_cost: 1,
           is_read: false,
-          was_masked: wasMasked, // ✅ Track masked messages
+          was_masked: wasMasked, // Track masked messages
         })
         .select()
         .single();
@@ -129,10 +129,10 @@ app.post("/user/send-message", async (req, res) => {
         })
         .eq("id", conversation_id);
 
-      // ✅ FIX: Mark conversation as read for the user (they just sent a message)
+      // Mark conversation as read for the user
       await markConversationAsRead(conversation_id, user_id);
 
-      // Also refresh the expires_at to give more time
+      // Refresh the expires_at to give more time
       const newExpiresAt = new Date();
       newExpiresAt.setMinutes(newExpiresAt.getMinutes() + 5);
 
@@ -153,11 +153,11 @@ app.post("/user/send-message", async (req, res) => {
         message,
         assigned_operator_id: assignedOperatorId,
         is_new_assignment: false,
+        was_masked: wasMasked,
       });
     }
 
-    // 🚫 Remove this conversation from the stopped queue
-    // because the REAL USER has responded.
+    // Remove this conversation from the stopped queue
     await supabase
       .from("stopped_queue")
       .update({
@@ -169,10 +169,7 @@ app.post("/user/send-message", async (req, res) => {
       .eq("conversation_id", conversation_id)
       .in("status", ["pending", "assigned"]);
 
-    // 🔄 IMPORTANT:
-    // The user has returned, so reset the stopped re-engagement count.
-    // This gives the conversation a fresh opportunity to enter the
-    // stopped queue again in the future.
+    // Reset stopped re-engagement count
     const { error: resetStoppedError } = await supabase
       .from("conversations")
       .update({
@@ -187,7 +184,7 @@ app.post("/user/send-message", async (req, res) => {
       );
     }
 
-    // ❌ No active assignment - check for ANY active queue row
+    // Check for any active queue row
     const { data: activeQueue } = await supabase
       .from("message_queue")
       .select("*")
@@ -195,18 +192,19 @@ app.post("/user/send-message", async (req, res) => {
       .in("status", ["pending", "assigned"])
       .maybeSingle();
 
-    // Insert the message
+    // Insert the masked message
     const { data: message, error: msgError } = await supabase
       .from("messages")
       .insert({
         conversation_id,
         sender_type: "real_user",
         sender_user_id: user_id,
-        content,
+        content: maskedContent, // ✅ MASKED
         image_url,
         direction: "user_to_fictional",
         credit_cost: 1,
         is_read: false,
+        was_masked: wasMasked, // Track masked messages
       })
       .select()
       .single();
@@ -223,10 +221,10 @@ app.post("/user/send-message", async (req, res) => {
       })
       .eq("id", conversation_id);
 
-    // ✅ FIX: Mark conversation as read for the user (they just sent a message)
+    // Mark conversation as read for the user
     await markConversationAsRead(conversation_id, user_id);
 
-    // ACTIVE QUEUE EXISTS
+    // Active queue exists
     if (activeQueue) {
       console.log(
         `📨 Existing active queue found for conversation ${conversation_id}`,
@@ -246,6 +244,7 @@ app.post("/user/send-message", async (req, res) => {
         message,
         assigned_operator_id: activeQueue.assigned_operator_id || null,
         is_new_assignment: false,
+        was_masked: wasMasked,
       });
     }
 
@@ -270,6 +269,7 @@ app.post("/user/send-message", async (req, res) => {
       message,
       assigned_operator_id: null,
       is_new_assignment: true,
+      was_masked: wasMasked,
     });
   } catch (err) {
     console.error("Send message error:", err);
@@ -1467,8 +1467,7 @@ app.post("/operator/send-reply", async (req, res) => {
       .eq("id", conversation_id)
       .single();
 
-    // ✅ ADD THIS RIGHT AFTER the device ownership validation:
-    // ✅ NEW: Validate operator message BEFORE sending
+    // ✅ STEP 2: Validate operator message BEFORE sending
     if (content) {
       const { isBlocked, canSend } = await validateOperatorMessage(
         supabase,
@@ -1479,8 +1478,7 @@ app.post("/operator/send-reply", async (req, res) => {
       if (!canSend) {
         console.log(`🚨 OPERATOR VIOLATION: Operator ${operator_id} blocked`);
 
-        // 1. Block the message
-        // 2. Release the queue item back to pending
+        // 1. Release the queue item back to pending
         await supabase
           .from("message_queue")
           .update({
@@ -1493,7 +1491,7 @@ app.post("/operator/send-reply", async (req, res) => {
           .eq("id", queue_id)
           .eq("status", "assigned");
 
-        // 3. Clear conversation ownership
+        // 2. Clear conversation ownership
         await supabase
           .from("conversations")
           .update({
@@ -1503,7 +1501,7 @@ app.post("/operator/send-reply", async (req, res) => {
           })
           .eq("id", conversation_id);
 
-        // 4. Logout operator
+        // 3. Logout operator
         await supabase
           .from("operator_sessions")
           .update({ status: "offline" })
@@ -1525,7 +1523,7 @@ app.post("/operator/send-reply", async (req, res) => {
       });
     }
 
-    // ✅ STEP 2: Check if the operator actually has an active assignment
+    // ✅ STEP 3: Check if the operator actually has an active assignment
     const { data: activeQueue, error: queueCheckError } = await supabase
       .from("message_queue")
       .select("id, expires_at")
@@ -1546,15 +1544,13 @@ app.post("/operator/send-reply", async (req, res) => {
           active_operator_at: null,
         })
         .eq("id", conversation_id);
-
-      // ✅ Continue to allow reply (don't return)
     }
 
-    // ✅ STEP 3: Device validation - ONLY check if there's an active queue AND device is set
+    // ✅ STEP 4: Device validation - ONLY check if there's an active queue AND device is set
     if (
-      activeQueue && // ✅ Only check if there's an active assignment
+      activeQueue && // Only check if there's an active assignment
       conversation.active_operator_id === operator_id &&
-      conversation.active_operator_device !== null && // ✅ Only check if device is set
+      conversation.active_operator_device !== null && // Only check if device is set
       conversation.active_operator_device !== device_id
     ) {
       console.log("🚫 Duplicate device blocked:", {
