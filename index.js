@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import paymentsRouter from "./src/routes/payments.js";
 import { sendNewMessageEmail } from "./src/services/emailService.js";
+// ✅ Add this:
 import {
   maskUserMessage,
   validateOperatorMessage,
@@ -94,6 +95,7 @@ app.post("/user/send-message", async (req, res) => {
       // Just insert the message - no queue item creation
       // ✅ NEW: Mask sensitive information BEFORE inserting
       const { maskedContent, wasMasked, detectionType } = await maskUserMessage(
+        supabase,
         conversation_id,
         user_id,
         content,
@@ -1469,6 +1471,7 @@ app.post("/operator/send-reply", async (req, res) => {
     // ✅ NEW: Validate operator message BEFORE sending
     if (content) {
       const { isBlocked, canSend } = await validateOperatorMessage(
+        supabase,
         content,
         operator_id,
       );
