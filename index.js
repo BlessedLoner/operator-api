@@ -64,7 +64,14 @@ app.post("/user/send-message", async (req, res) => {
   try {
     const { conversation_id, user_id, content, image_url } = req.body;
 
-    // ✅ STEP 1: ALWAYS mask user messages FIRST (BEFORE any database operations)
+    console.log("📨 Received user message:", {
+      user_id,
+      conversation_id,
+      content: content?.substring(0, 50),
+      contentLength: content?.length,
+    });
+
+    // ✅ STEP 1: ALWAYS mask user messages FIRST
     const { maskedContent, wasMasked, detectionType } = await maskUserMessage(
       supabase,
       conversation_id,
@@ -72,26 +79,13 @@ app.post("/user/send-message", async (req, res) => {
       content,
     );
 
-    // Log the detection for debugging
-    if (wasMasked) {
-      console.log(
-        `🔒 Masked ${detectionType} from user ${user_id}: "${content}" -> "${maskedContent}"`,
-      );
-    }
+    console.log("🔒 Masking result:", {
+      wasMasked,
+      detectionType,
+      maskedContent: maskedContent?.substring(0, 50),
+    });
 
-    // Check if this conversation already has an ACTIVE assignment
-    const { data: existingAssignment, error: assignError } = await supabase
-      .from("message_queue")
-      .select("id, assigned_operator_id, status, expires_at")
-      .eq("conversation_id", conversation_id)
-      .eq("status", "assigned")
-      .gte("expires_at", new Date().toISOString())
-      .maybeSingle();
-
-    let isNewAssignment = false;
-    let assignedOperatorId = null;
-
-    // Helper function to mark conversation as read for the user
+    // Helper function to mark conversation as read
     const markConversationAsRead = async (convId, userId) => {
       await supabase.from("conversation_reads").upsert({
         conversation_id: convId,
@@ -100,125 +94,47 @@ app.post("/user/send-message", async (req, res) => {
       });
     };
 
-    if (existingAssignment) {
-      // Conversation already assigned to an operator
-      assignedOperatorId = existingAssignment.assigned_operator_id;
-      console.log(
-        `📨 Message added to existing conversation assigned to operator ${assignedOperatorId}`,
-      );
-
-      // ✅ Insert masked message (ALWAYS use maskedContent)
-      const { data: message, error: msgError } = await supabase
-        .from("messages")
-        .insert({
-          conversation_id,
-          sender_type: "real_user",
-          sender_user_id: user_id,
-          content: maskedContent, // ✅ MASKED
-          image_url,
-          direction: "user_to_fictional",
-          credit_cost: 1,
-          is_read: false,
-          was_masked: wasMasked, // ✅ Track masked messages
-        })
-        .select()
-        .single();
-
-      if (msgError) throw msgError;
-
-      // Update conversation last message
-      await supabase
-        .from("conversations")
-        .update({
-          last_message_at: message.created_at,
-          last_message_sender_id: user_id,
-          last_message_preview: content?.substring(0, 50) || "📷 Sent a photo",
-        })
-        .eq("id", conversation_id);
-
-      // Mark conversation as read for the user
-      await markConversationAsRead(conversation_id, user_id);
-
-      // Refresh the expires_at
-      const newExpiresAt = new Date();
-      newExpiresAt.setMinutes(newExpiresAt.getMinutes() + 5);
-
-      await supabase
-        .from("message_queue")
-        .update({ expires_at: newExpiresAt.toISOString() })
-        .eq("id", existingAssignment.id);
-
-      await supabase
-        .from("conversations")
-        .update({
-          stopped_attempts: 0,
-        })
-        .eq("id", conversation_id);
-
-      return res.json({
-        success: true,
-        message,
-        assigned_operator_id: assignedOperatorId,
-        is_new_assignment: false,
-        was_masked: wasMasked,
-      });
-    }
-
-    // Remove this conversation from the stopped queue
-    await supabase
-      .from("stopped_queue")
-      .update({
-        status: "cancelled",
-        assigned_operator_id: null,
-        assigned_at: null,
-        expires_at: null,
-      })
-      .eq("conversation_id", conversation_id)
-      .in("status", ["pending", "assigned"]);
-
-    // Reset stopped re-engagement count
-    const { error: resetStoppedError } = await supabase
-      .from("conversations")
-      .update({
-        stopped_attempts: 0,
-      })
-      .eq("id", conversation_id);
-
-    if (resetStoppedError) {
-      console.error(
-        "❌ Failed to reset stopped re-engagement count:",
-        resetStoppedError,
-      );
-    }
-
-    // Check for any active queue row
-    const { data: activeQueue } = await supabase
+    // Check for existing assignment
+    const { data: existingAssignment, error: assignError } = await supabase
       .from("message_queue")
-      .select("*")
+      .select("id, assigned_operator_id, status, expires_at")
       .eq("conversation_id", conversation_id)
-      .in("status", ["pending", "assigned"])
+      .eq("status", "assigned")
+      .gte("expires_at", new Date().toISOString())
       .maybeSingle();
 
-    // ✅ Insert the masked message (ALWAYS use maskedContent)
+    if (assignError) {
+      console.error("❌ Assignment check error:", assignError);
+    }
+
+    let assignedOperatorId = null;
+
+    // ✅ Insert the masked message
     const { data: message, error: msgError } = await supabase
       .from("messages")
       .insert({
         conversation_id,
         sender_type: "real_user",
         sender_user_id: user_id,
-        content: maskedContent, // ✅ MASKED
+        content: maskedContent, // ✅ ALWAYS MASKED
         image_url,
         direction: "user_to_fictional",
         credit_cost: 1,
         is_read: false,
-        was_masked: wasMasked, // ✅ Track masked messages
+        was_masked: wasMasked,
       })
       .select()
       .single();
 
-    if (msgError) throw msgError;
+    // ✅ Check for errors properly
+    if (msgError) {
+      console.error("❌ Message insert error:", msgError);
+      throw new Error(msgError.message);
+    }
 
-    // Update conversation
+    console.log("✅ Message inserted:", message.id, "was_masked:", wasMasked);
+
+    // Update conversation last message
     await supabase
       .from("conversations")
       .update({
@@ -231,12 +147,57 @@ app.post("/user/send-message", async (req, res) => {
     // Mark conversation as read for the user
     await markConversationAsRead(conversation_id, user_id);
 
-    // Active queue exists
-    if (activeQueue) {
-      console.log(
-        `📨 Existing active queue found for conversation ${conversation_id}`,
-      );
+    if (existingAssignment) {
+      // Refresh the expires_at
+      const newExpiresAt = new Date();
+      newExpiresAt.setMinutes(newExpiresAt.getMinutes() + 5);
 
+      await supabase
+        .from("message_queue")
+        .update({ expires_at: newExpiresAt.toISOString() })
+        .eq("id", existingAssignment.id);
+
+      await supabase
+        .from("conversations")
+        .update({ stopped_attempts: 0 })
+        .eq("id", conversation_id);
+
+      return res.json({
+        success: true,
+        message,
+        assigned_operator_id: existingAssignment.assigned_operator_id,
+        is_new_assignment: false,
+        was_masked: wasMasked,
+      });
+    }
+
+    // Remove from stopped queue
+    await supabase
+      .from("stopped_queue")
+      .update({
+        status: "cancelled",
+        assigned_operator_id: null,
+        assigned_at: null,
+        expires_at: null,
+      })
+      .eq("conversation_id", conversation_id)
+      .in("status", ["pending", "assigned"]);
+
+    // Reset stopped attempts
+    await supabase
+      .from("conversations")
+      .update({ stopped_attempts: 0 })
+      .eq("id", conversation_id);
+
+    // Check for active queue
+    const { data: activeQueue } = await supabase
+      .from("message_queue")
+      .select("*")
+      .eq("conversation_id", conversation_id)
+      .in("status", ["pending", "assigned"])
+      .maybeSingle();
+
+    if (activeQueue) {
       await supabase
         .from("message_queue")
         .update({
@@ -255,13 +216,7 @@ app.post("/user/send-message", async (req, res) => {
       });
     }
 
-    // NO ACTIVE QUEUE → CREATE NEW ONE
-    isNewAssignment = true;
-
-    console.log(
-      `🆕 Creating new queue item for conversation ${conversation_id}`,
-    );
-
+    // Create new queue item
     await supabase.from("message_queue").insert({
       conversation_id,
       message_id: message.id,
@@ -279,7 +234,7 @@ app.post("/user/send-message", async (req, res) => {
       was_masked: wasMasked,
     });
   } catch (err) {
-    console.error("Send message error:", err);
+    console.error("❌ Send message error:", err);
     res.status(500).json({ error: err.message });
   }
 });

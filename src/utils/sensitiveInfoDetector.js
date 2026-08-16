@@ -61,10 +61,10 @@ function normalizeText(text) {
     normalized = normalized.replace(new RegExp(unicode, "g"), ascii);
   }
 
-  // Remove spaces between digits (but keep word boundaries)
+  // Remove spaces between digits
   normalized = normalized.replace(/(\d)\s+(\d)/g, "$1$2");
 
-  // Replace word numbers with digits (only standalone words)
+  // Replace word numbers with digits
   for (const [word, num] of Object.entries(NUMBER_WORDS)) {
     const regex = new RegExp(`\\b${word}\\b`, "gi");
     normalized = normalized.replace(regex, num);
@@ -85,9 +85,6 @@ const PHONE_PATTERNS = [
   // Obfuscated: one two three four five six seven eight nine zero
   /\b(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\b/gi,
 
-  // Combined words with separators: one-two-three-four
-  /\b(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\b/gi,
-
   // Spaced: 1 2 3 4 5 6 7 8 9 0
   /\b\d\s+\d\s+\d\s+\d\s+\d\s+\d\s+\d\s+\d\s+\d\s+\d\b/g,
 
@@ -97,41 +94,28 @@ const PHONE_PATTERNS = [
   // Dotted: 1.2.3.4.5.6.7.8.9.0
   /\b\d\.\d\.\d\.\d\.\d\.\d\.\d\.\d\.\d\.\d\b/g,
 
-  // Unicode digits: 𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵𝟬 (detected through normalization)
+  // Unicode digits
   /[𝟘𝟙𝟚𝟛𝟜𝟝𝟞𝟟𝟠𝟡]{7,}/g,
+
+  // 9-digit word pattern (for incomplete numbers)
+  /\b(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\b/gi,
 ];
 
-// Email patterns (enhanced)
+// Email patterns
 const EMAIL_PATTERNS = [
-  // Standard emails
   /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
-
-  // Obfuscated: name [at] gmail [dot] com
   /\b[A-Z0-9._%+-]+\s*\[at\]\s*[A-Z0-9.-]+\s*\[dot\]\s*[A-Z]{2,}\b/gi,
-
-  // Obfuscated: name (at) gmail (dot) com
   /\b[A-Z0-9._%+-]+\s*\(at\)\s*[A-Z0-9.-]+\s*\(dot\)\s*[A-Z]{2,}\b/gi,
-
-  // Obfuscated: name at gmail dot com
   /\b[A-Z0-9._%+-]+\s*at\s*[A-Z0-9.-]+\s*dot\s*[A-Z]{2,}\b/gi,
-
-  // Obfuscated: name [@] gmail [.] com
-  /\b[A-Z0-9._%+-]+\s*\[@\]\s*[A-Z0-9.-]+\s*\[\.\]\s*[A-Z]{2,}\b/gi,
 ];
 
-// Social patterns (enhanced)
+// Social patterns
 const SOCIAL_PATTERNS = [
   /(whatsapp|whtsapp|whats app|whats-app|wa\.me|telegram|tgram|tg|t\.me|instagram|ig|twitter|x|facebook|fb|tiktok|snapchat)\s*[-.:]\s*\+?\d{1,3}[-.\s]?\d{3,4}[-.\s]?\d{3,4}[-.\s]?\d{3,4}/gi,
   /(instagram|ig|twitter|x|facebook|fb|tiktok|snapchat)\s*[-.:]\s*@?[a-zA-Z0-9_.]{3,30}/gi,
-
-  // WhatsApp/Telegram with variations
-  /(whatsapp|whtsapp|whats app|whats-app|telegram|tgram|tg)\s*[:.]?\s*(\+?\d[\d\s\-]{6,}\d)/gi,
-
-  // Social media with "at"
-  /(instagram|ig|twitter|x|facebook|fb|tiktok|snapchat)\s*at\s*@?[a-zA-Z0-9_.]{3,30}/gi,
 ];
 
-// Context keywords (expanded)
+// Context keywords
 const CONTEXT_KEYWORDS = [
   "call me",
   "text me",
@@ -143,49 +127,15 @@ const CONTEXT_KEYWORDS = [
   "dm me",
   "message me",
   "phone me",
-  "ring me",
-  "get me on",
-  "find me at",
-  "connect with me",
-  "my phone",
-  "my cell",
-  "my mobile",
-  "my whatsapp",
-  "my telegram",
-  "my social",
-  "my insta",
-  "my ig",
-  "my email",
-  "my mail",
-  "send me",
 ];
 
-// Personal patterns for operator blocking (expanded)
-const PERSONAL_PATTERNS = [
-  /my\s*(phone|number|whatsapp|telegram|social|insta|ig|email|contact|whats app|whats-app|cell|mobile|handphone)/gi,
-  /contact\s*me\s*(at|on|via)/gi,
-  /dm\s*me/gi,
-  /send\s*me\s*(a\s*)?message/gi,
-  /text\s*me/gi,
-  /call\s*me/gi,
-  /reach\s*me/gi,
-  /get\s*in\s*touch/gi,
-  /here's\s*my/gi,
-  /here is\s*my/gi,
-  /this is\s*my/gi,
-  /you can\s*(call|text|reach|contact|message|whatsapp|telegram)/gi,
-  /add\s*me\s*on/gi,
-  /follow\s*me\s*on/gi,
-  /ping\s*me/gi,
-  /hit\s*me\s*up/gi,
-  /slide\s*into\s*my/gi,
-  /shoot\s*me\s*a\s*(message|text)/gi,
-  /give\s*me\s*a\s*(call|ring|buzz)/gi,
-  /drop\s*me\s*a\s*(line|message|text)/gi,
-  /my\s*(contact|social media|username|handle)/gi,
-];
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
-// Detect sensitive info in text
+/**
+ * Detect sensitive info in text
+ */
 export function detectSensitiveInfo(text) {
   if (!text || typeof text !== "string") {
     return { detected: false, type: null, masked: text, original: text };
@@ -198,17 +148,13 @@ export function detectSensitiveInfo(text) {
   // Normalize text for detection
   const normalizedText = normalizeText(text);
 
-  // Check phone numbers using normalized text
+  // Check phone numbers
   for (const pattern of PHONE_PATTERNS) {
     const matches = normalizedText.match(pattern);
     if (matches && matches.length > 0) {
       detected = true;
       type = "phone";
-
-      // Find the original matches in the original text
       for (const match of matches) {
-        // Try to find the original text that matches this pattern
-        // This is a simplified approach - for production, you'd want to map back
         maskedText = maskedText.replace(
           new RegExp(escapeRegExp(match), "g"),
           "***********",
@@ -218,7 +164,7 @@ export function detectSensitiveInfo(text) {
     }
   }
 
-  // Check emails (if not already detected)
+  // Check emails
   if (!detected) {
     for (const pattern of EMAIL_PATTERNS) {
       const matches = text.match(pattern);
@@ -241,7 +187,7 @@ export function detectSensitiveInfo(text) {
     }
   }
 
-  // Check social (if not already detected)
+  // Check social
   if (!detected) {
     for (const pattern of SOCIAL_PATTERNS) {
       const matches = text.match(pattern);
@@ -259,34 +205,22 @@ export function detectSensitiveInfo(text) {
     }
   }
 
-  // Additional context check (if not already detected)
+  // Context check (catch numbers in context)
   if (!detected) {
     const hasContext = CONTEXT_KEYWORDS.some((keyword) =>
       text.toLowerCase().includes(keyword),
     );
 
     if (hasContext) {
-      // Look for number sequences (5+ digits) in the original text
       const numberMatches = text.match(/\b\d{5,}\b/g);
       if (numberMatches && numberMatches.length > 0) {
+        detected = true;
+        type = "phone";
         for (const match of numberMatches) {
-          detected = true;
-          type = "phone";
           maskedText = maskedText.replace(
             new RegExp(escapeRegExp(match), "g"),
             "***********",
           );
-        }
-      }
-
-      // Also check normalized text for number sequences
-      if (!detected) {
-        const normalizedNumberMatches = normalizedText.match(/\b\d{5,}\b/g);
-        if (normalizedNumberMatches && normalizedNumberMatches.length > 0) {
-          detected = true;
-          type = "phone";
-          // Mask the entire segment
-          maskedText = "***********";
         }
       }
     }
@@ -295,54 +229,42 @@ export function detectSensitiveInfo(text) {
   return { detected, type, masked: maskedText, original: text };
 }
 
-// Check if operator message should be blocked
+/**
+ * Check if operator message should be blocked
+ */
 export function isOperatorMessageBlocked(text) {
   if (!text || typeof text !== "string") return false;
 
-  // First check for sensitive info
   const result = detectSensitiveInfo(text);
   if (result.detected) return true;
 
-  // Normalize text for better detection
+  // Personal patterns
+  const personalPatterns = [
+    /my\s*(phone|number|whatsapp|telegram|social|insta|ig|email|contact|cell|mobile)/gi,
+    /contact\s*me\s*(at|on|via)/gi,
+    /dm\s*me/gi,
+    /send\s*me\s*(a\s*)?message/gi,
+    /text\s*me/gi,
+    /call\s*me/gi,
+    /reach\s*me/gi,
+    /here's\s*my/gi,
+    /here is\s*my/gi,
+    /you can\s*(call|text|reach|contact|message)/gi,
+    /add\s*me\s*on/gi,
+  ];
+
   const normalized = text.toLowerCase().replace(/\s+/g, " ");
 
-  // Check personal patterns
-  for (const pattern of PERSONAL_PATTERNS) {
+  for (const pattern of personalPatterns) {
     if (pattern.test(normalized)) {
       return true;
     }
   }
 
-  // Check for number sequences (5+ digits)
-  const numberSequence = normalized.match(/\b\d{5,}\b/g);
-  if (numberSequence && numberSequence.length > 0) {
-    return true;
-  }
-
-  // Check for "number" followed by digits
-  if (/number\s*[:\-]?\s*\d{3,}/gi.test(normalized)) {
-    return true;
-  }
-
-  // Check for encoded numbers (e.g., "one two three")
-  const wordNumbers = normalized.match(
-    /\b(one|two|three|four|five|six|seven|eight|nine|zero|oh)\b/gi,
-  );
-  if (wordNumbers && wordNumbers.length >= 5) {
+  // Check for number sequences
+  if (/\b\d{5,}\b/.test(normalized)) {
     return true;
   }
 
   return false;
 }
-
-// Helper function to escape regex special characters
-function escapeRegExp(string) {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-// Export for use in other modules
-export const SENSITIVE_INFO_TYPES = {
-  PHONE: "phone",
-  EMAIL: "email",
-  SOCIAL: "social",
-};
