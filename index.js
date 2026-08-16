@@ -116,7 +116,8 @@ app.post("/user/send-message", async (req, res) => {
         conversation_id,
         sender_type: "real_user",
         sender_user_id: user_id,
-        content: maskedContent, // ✅ ALWAYS MASKED
+        content: wasMasked ? maskedContent : content, // Always store masked in content
+        original_content: content, // ✅ Store the original for the user
         image_url,
         direction: "user_to_fictional",
         credit_cost: 1,
@@ -513,21 +514,51 @@ app.post("/operator/next-conversation", async (req, res) => {
   }
 });
 
-// Load messages
-app.get("/operator/conversations/:id/messages", async (req, res) => {
+// // Load messages
+// app.get("/operator/conversations/:id/messages", async (req, res) => {
+//   const { id } = req.params;
+
+//   const { data, error } = await supabase
+//     .from("messages")
+//     .select("*")
+//     .eq("conversation_id", id)
+//     .order("created_at");
+
+//   if (error) {
+//     return res.status(500).json({ error: error.message });
+//   }
+
+//   res.json(data);
+// });
+
+// Load messages for USER (original content)
+app.get("/user/conversations/:id/messages", async (req, res) => {
   const { id } = req.params;
+  const { user_id } = req.query;
 
   const { data, error } = await supabase
     .from("messages")
     .select("*")
     .eq("conversation_id", id)
-    .order("created_at");
+    .order("created_at", { ascending: true });
 
   if (error) {
     return res.status(500).json({ error: error.message });
   }
 
-  res.json(data);
+  // ✅ Show original content for user's own messages
+  const userMessages = data.map((msg) => {
+    // If this is the user's own message AND it was masked, show original
+    if (msg.sender_user_id === user_id && msg.was_masked) {
+      return {
+        ...msg,
+        content: msg.original_content || msg.content,
+      };
+    }
+    return msg;
+  });
+
+  res.json(userMessages);
 });
 
 // Get next pending conversation for STOPPED operators only
