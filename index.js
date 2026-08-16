@@ -64,7 +64,7 @@ app.post("/user/send-message", async (req, res) => {
   try {
     const { conversation_id, user_id, content, image_url } = req.body;
 
-    // ✅ ALWAYS mask user messages FIRST
+    // ✅ STEP 1: ALWAYS mask user messages FIRST (BEFORE any database operations)
     const { maskedContent, wasMasked, detectionType } = await maskUserMessage(
       supabase,
       conversation_id,
@@ -72,7 +72,14 @@ app.post("/user/send-message", async (req, res) => {
       content,
     );
 
-    // Check if this conversation already has an ACTIVE assignment (within 5-min lock)
+    // Log the detection for debugging
+    if (wasMasked) {
+      console.log(
+        `🔒 Masked ${detectionType} from user ${user_id}: "${content}" -> "${maskedContent}"`,
+      );
+    }
+
+    // Check if this conversation already has an ACTIVE assignment
     const { data: existingAssignment, error: assignError } = await supabase
       .from("message_queue")
       .select("id, assigned_operator_id, status, expires_at")
@@ -100,7 +107,7 @@ app.post("/user/send-message", async (req, res) => {
         `📨 Message added to existing conversation assigned to operator ${assignedOperatorId}`,
       );
 
-      // Insert masked message
+      // ✅ Insert masked message (ALWAYS use maskedContent)
       const { data: message, error: msgError } = await supabase
         .from("messages")
         .insert({
@@ -112,7 +119,7 @@ app.post("/user/send-message", async (req, res) => {
           direction: "user_to_fictional",
           credit_cost: 1,
           is_read: false,
-          was_masked: wasMasked, // Track masked messages
+          was_masked: wasMasked, // ✅ Track masked messages
         })
         .select()
         .single();
@@ -132,7 +139,7 @@ app.post("/user/send-message", async (req, res) => {
       // Mark conversation as read for the user
       await markConversationAsRead(conversation_id, user_id);
 
-      // Refresh the expires_at to give more time
+      // Refresh the expires_at
       const newExpiresAt = new Date();
       newExpiresAt.setMinutes(newExpiresAt.getMinutes() + 5);
 
@@ -192,7 +199,7 @@ app.post("/user/send-message", async (req, res) => {
       .in("status", ["pending", "assigned"])
       .maybeSingle();
 
-    // Insert the masked message
+    // ✅ Insert the masked message (ALWAYS use maskedContent)
     const { data: message, error: msgError } = await supabase
       .from("messages")
       .insert({
@@ -204,7 +211,7 @@ app.post("/user/send-message", async (req, res) => {
         direction: "user_to_fictional",
         credit_cost: 1,
         is_read: false,
-        was_masked: wasMasked, // Track masked messages
+        was_masked: wasMasked, // ✅ Track masked messages
       })
       .select()
       .single();
