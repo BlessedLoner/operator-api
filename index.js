@@ -1091,13 +1091,17 @@ app.post("/operator/assign-next", async (req, res) => {
         }
 
         // Get all unread messages for this conversation
-        const { data: messages } = await supabase
+        const { data: messages, error: messagesError } = await supabase
           .from("messages")
           .select("*")
-          .eq("conversation_id", existingAssigned.conversation_id)
+          .eq("conversation_id", selectedMessage.conversation_id)
           .eq("is_read", false)
           .eq("sender_type", "real_user")
           .order("created_at", { ascending: true });
+
+        if (messagesError) {
+          console.error("❌ Failed to fetch messages:", messagesError);
+        }
 
         return res.json({
           assigned: true,
