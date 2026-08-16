@@ -145,3 +145,41 @@ export function checkMessageSafety(content) {
     masked: result.masked,
   };
 }
+
+export function maskMessageForOperator(message) {
+  if (!message || typeof message !== "object") {
+    return message;
+  }
+
+  // Only mask messages sent by the real user.
+  // Operator/fictional messages are never masked here.
+  if (message.sender_type !== "real_user") {
+    return message;
+  }
+
+  // No text content = nothing to inspect.
+  if (!message.content || typeof message.content !== "string") {
+    return message;
+  }
+
+  const result = detectSensitiveInfo(message.content);
+
+  if (!result.detected) {
+    return message;
+  }
+
+  return {
+    ...message,
+    content: result.masked,
+    was_masked: true,
+    detection_type: result.type,
+  };
+}
+
+export function maskMessagesForOperator(messages) {
+  if (!Array.isArray(messages)) {
+    return [];
+  }
+
+  return messages.map(maskMessageForOperator);
+}

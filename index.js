@@ -9,6 +9,8 @@ import { sendNewMessageEmail } from "./src/services/emailService.js";
 import {
   maskUserMessage,
   validateOperatorMessage,
+  maskMessagesForOperator,
+  maskMessageForOperator,
 } from "./src/services/messageMaskingService.js";
 
 dotenv.config();
@@ -426,13 +428,15 @@ app.post("/operator/next-conversation", async (req, res) => {
         .eq("sender_type", "real_user")
         .order("created_at", { ascending: true });
 
+        const operatorMessages = maskMessagesForOperator(messages || []);
+
       return res.json({
         assigned: true,
         assignmentId: existingAssignment.id,
         conversationId: conversation.id,
         userProfile: conversation.user_profiles,
         fictionalProfile: conversation.fictional_profiles,
-        messages: messages || [],
+        messages: operatorMessages,
         expiresAt: existingAssignment.expires_at,
       });
     }
@@ -498,13 +502,15 @@ app.post("/operator/next-conversation", async (req, res) => {
       .eq("sender_type", "real_user")
       .order("created_at", { ascending: true });
 
+      const operatorMessages = maskMessagesForOperator(messages || []);
+
     res.json({
       assigned: true,
       assignmentId: updated.id,
       conversationId: selectedMessage.conversation_id,
       userProfile: selectedMessage.conversations.user_profiles,
       fictionalProfile: selectedMessage.conversations.fictional_profiles,
-      messages: messages || [],
+      messages: operatorMessages,
       expiresAt: expiresAt.toISOString(),
     });
   } catch (err) {
@@ -515,19 +521,33 @@ app.post("/operator/next-conversation", async (req, res) => {
 
 // Load messages
 app.get("/operator/conversations/:id/messages", async (req, res) => {
-  const { id } = req.params;
+  try {
+    const { id } = req.params;
 
-  const { data, error } = await supabase
-    .from("messages")
-    .select("*")
-    .eq("conversation_id", id)
-    .order("created_at");
+    const { data, error } = await supabase
+      .from("messages")
+      .select("*")
+      .eq("conversation_id", id)
+      .order("created_at");
 
-  if (error) {
-    return res.status(500).json({ error: error.message });
+    if (error) {
+      console.error("Operator messages fetch error:", error);
+
+      return res.status(500).json({
+        error: error.message,
+      });
+    }
+
+    const operatorMessages = maskMessagesForOperator(data || []);
+
+    res.json(operatorMessages);
+  } catch (err) {
+    console.error("Operator messages endpoint error:", err);
+
+    res.status(500).json({
+      error: err.message,
+    });
   }
-
-  res.json(data);
 });
 
 // Get next pending conversation for STOPPED operators only
@@ -947,6 +967,8 @@ app.get("/operator/current-message", async (req, res) => {
         return res.status(500).json({ error: msgError.message });
       }
 
+      const operatorMessage = maskMessageForOperator(message);
+
       await supabase
         .from("conversations")
         .update({
@@ -960,7 +982,7 @@ app.get("/operator/current-message", async (req, res) => {
         hasMessage: true,
         queueId: queueItem.id,
         conversationId: queueItem.conversation_id,
-        message: message,
+        message: operatorMessage,
         userProfile: queueItem.conversations.user_profiles,
         fictionalProfile: queueItem.conversations.fictional_profiles,
         expiresAt: queueItem.expires_at,
@@ -1070,7 +1092,8 @@ app.post("/operator/assign-next", async (req, res) => {
         const { data: messages, error: messagesError } = await supabase
           .from("messages")
           .select("*")
-          .eq("conversation_id", selectedMessage.conversation_id)
+          // .eq("conversation_id", selectedMessage.conversation_id)
+          .eq("conversation_id", existingAssigned.conversation_id)
           .eq("is_read", false)
           .eq("sender_type", "real_user")
           .order("created_at", { ascending: true });
@@ -1079,12 +1102,14 @@ app.post("/operator/assign-next", async (req, res) => {
           console.error("❌ Failed to fetch messages:", messagesError);
         }
 
+        const operatorMessages = maskMessagesForOperator(messages || []);
+
         return res.json({
           assigned: true,
           type: "regular",
           queueId: existingAssigned.id,
           conversationId: conversation.id,
-          allMessages: messages || [],
+          allMessages: operatorMessages,
           userProfile: conversation.user_profiles,
           fictionalProfile: conversation.fictional_profiles,
           expiresAt: existingAssigned.expires_at,
@@ -1238,12 +1263,14 @@ app.post("/operator/assign-next", async (req, res) => {
         }
       }
 
+      const operatorMessages = maskMessagesForOperator(messages || []);
+
       return res.json({
         assigned: true,
         type: "regular",
         queueId: updated.id,
         conversationId: selectedMessage.conversation_id,
-        allMessages: messages || [],
+        allMessages: operatorMessages,
         userProfile: selectedMessage.conversations.user_profiles,
         fictionalProfile: selectedMessage.conversations.fictional_profiles,
         expiresAt: expiresAt.toISOString(),
