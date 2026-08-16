@@ -1,3 +1,5 @@
+// src/utils/sensitiveInfoDetector.js
+
 /**
  * Detects sensitive information (phone numbers, emails, social media)
  * Enhanced with better pattern matching and normalization
@@ -61,10 +63,10 @@ function normalizeText(text) {
     normalized = normalized.replace(new RegExp(unicode, "g"), ascii);
   }
 
-  // Remove spaces between digits
+  // Remove spaces between digits (but keep word boundaries)
   normalized = normalized.replace(/(\d)\s+(\d)/g, "$1$2");
 
-  // Replace word numbers with digits
+  // Replace word numbers with digits (only standalone words)
   for (const [word, num] of Object.entries(NUMBER_WORDS)) {
     const regex = new RegExp(`\\b${word}\\b`, "gi");
     normalized = normalized.replace(regex, num);
@@ -85,6 +87,9 @@ const PHONE_PATTERNS = [
   // Obfuscated: one two three four five six seven eight nine zero
   /\b(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\b/gi,
 
+  // Combined words with separators: one-two-three-four
+  /\b(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)[-._\s]*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\b/gi,
+
   // Spaced: 1 2 3 4 5 6 7 8 9 0
   /\b\d\s+\d\s+\d\s+\d\s+\d\s+\d\s+\d\s+\d\s+\d\s+\d\b/g,
 
@@ -94,28 +99,41 @@ const PHONE_PATTERNS = [
   // Dotted: 1.2.3.4.5.6.7.8.9.0
   /\b\d\.\d\.\d\.\d\.\d\.\d\.\d\.\d\.\d\.\d\b/g,
 
-  // Unicode digits
+  // Unicode digits: 𝟭𝟮𝟯𝟰𝟱𝟲𝟳𝟴𝟵𝟬 (detected through normalization)
   /[𝟘𝟙𝟚𝟛𝟜𝟝𝟞𝟟𝟠𝟡]{7,}/g,
-
-  // 9-digit word pattern (for incomplete numbers)
-  /\b(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\s*[-.\s]*\s*(one|on|two|tow|to|three|tree|four|fore|five|fiv|six|sex|seven|sevn|eight|eit|nine|nin|zero|oh)\b/gi,
 ];
 
-// Email patterns
+// Email patterns (enhanced)
 const EMAIL_PATTERNS = [
+  // Standard emails
   /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+
+  // Obfuscated: name [at] gmail [dot] com
   /\b[A-Z0-9._%+-]+\s*\[at\]\s*[A-Z0-9.-]+\s*\[dot\]\s*[A-Z]{2,}\b/gi,
+
+  // Obfuscated: name (at) gmail (dot) com
   /\b[A-Z0-9._%+-]+\s*\(at\)\s*[A-Z0-9.-]+\s*\(dot\)\s*[A-Z]{2,}\b/gi,
+
+  // Obfuscated: name at gmail dot com
   /\b[A-Z0-9._%+-]+\s*at\s*[A-Z0-9.-]+\s*dot\s*[A-Z]{2,}\b/gi,
+
+  // Obfuscated: name [@] gmail [.] com
+  /\b[A-Z0-9._%+-]+\s*\[@\]\s*[A-Z0-9.-]+\s*\[\.\]\s*[A-Z]{2,}\b/gi,
 ];
 
-// Social patterns
+// Social patterns (enhanced)
 const SOCIAL_PATTERNS = [
   /(whatsapp|whtsapp|whats app|whats-app|wa\.me|telegram|tgram|tg|t\.me|instagram|ig|twitter|x|facebook|fb|tiktok|snapchat)\s*[-.:]\s*\+?\d{1,3}[-.\s]?\d{3,4}[-.\s]?\d{3,4}[-.\s]?\d{3,4}/gi,
   /(instagram|ig|twitter|x|facebook|fb|tiktok|snapchat)\s*[-.:]\s*@?[a-zA-Z0-9_.]{3,30}/gi,
+
+  // WhatsApp/Telegram with variations
+  /(whatsapp|whtsapp|whats app|whats-app|telegram|tgram|tg)\s*[:.]?\s*(\+?\d[\d\s\-]{6,}\d)/gi,
+
+  // Social media with "at"
+  /(instagram|ig|twitter|x|facebook|fb|tiktok|snapchat)\s*at\s*@?[a-zA-Z0-9_.]{3,30}/gi,
 ];
 
-// Context keywords
+// Context keywords (expanded)
 const CONTEXT_KEYWORDS = [
   "call me",
   "text me",
@@ -127,8 +145,24 @@ const CONTEXT_KEYWORDS = [
   "dm me",
   "message me",
   "phone me",
+  "ring me",
+  "get me on",
+  "find me at",
+  "connect with me",
+  "my phone",
+  "my cell",
+  "my mobile",
+  "my whatsapp",
+  "my telegram",
+  "my social",
+  "my insta",
+  "my ig",
+  "my email",
+  "my mail",
+  "send me",
 ];
 
+// Helper function to escape regex special characters
 function escapeRegExp(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -148,7 +182,7 @@ export function detectSensitiveInfo(text) {
   // Normalize text for detection
   const normalizedText = normalizeText(text);
 
-  // Check phone numbers
+  // Check phone numbers using normalized text
   for (const pattern of PHONE_PATTERNS) {
     const matches = normalizedText.match(pattern);
     if (matches && matches.length > 0) {
@@ -164,7 +198,7 @@ export function detectSensitiveInfo(text) {
     }
   }
 
-  // Check emails
+  // Check emails (if not already detected)
   if (!detected) {
     for (const pattern of EMAIL_PATTERNS) {
       const matches = text.match(pattern);
@@ -187,7 +221,7 @@ export function detectSensitiveInfo(text) {
     }
   }
 
-  // Check social
+  // Check social (if not already detected)
   if (!detected) {
     for (const pattern of SOCIAL_PATTERNS) {
       const matches = text.match(pattern);
@@ -205,22 +239,34 @@ export function detectSensitiveInfo(text) {
     }
   }
 
-  // Context check (catch numbers in context)
+  // Additional context check (if not already detected)
   if (!detected) {
     const hasContext = CONTEXT_KEYWORDS.some((keyword) =>
       text.toLowerCase().includes(keyword),
     );
 
     if (hasContext) {
+      // Look for number sequences (5+ digits) in the original text
       const numberMatches = text.match(/\b\d{5,}\b/g);
       if (numberMatches && numberMatches.length > 0) {
-        detected = true;
-        type = "phone";
         for (const match of numberMatches) {
+          detected = true;
+          type = "phone";
           maskedText = maskedText.replace(
             new RegExp(escapeRegExp(match), "g"),
             "***********",
           );
+        }
+      }
+
+      // Also check normalized text for number sequences
+      if (!detected) {
+        const normalizedNumberMatches = normalizedText.match(/\b\d{5,}\b/g);
+        if (normalizedNumberMatches && normalizedNumberMatches.length > 0) {
+          detected = true;
+          type = "phone";
+          // Mask the entire segment
+          maskedText = "***********";
         }
       }
     }
