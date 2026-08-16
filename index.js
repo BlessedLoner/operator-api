@@ -5,6 +5,10 @@ import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import paymentsRouter from "./src/routes/payments.js";
 import { sendNewMessageEmail } from "./src/services/emailService.js";
+import {
+  maskUserMessage,
+  validateOperatorMessage,
+} from "./src/services/messageMaskingService.js";
 
 dotenv.config();
 
@@ -88,17 +92,25 @@ app.post("/user/send-message", async (req, res) => {
       );
 
       // Just insert the message - no queue item creation
+      // ✅ NEW: Mask sensitive information BEFORE inserting
+      const { maskedContent, wasMasked, detectionType } = await maskUserMessage(
+        conversation_id,
+        user_id,
+        content,
+      );
+
       const { data: message, error: msgError } = await supabase
         .from("messages")
         .insert({
           conversation_id,
           sender_type: "real_user",
           sender_user_id: user_id,
-          content,
+          content: maskedContent, // ✅ SEND MASKED CONTENT
           image_url,
           direction: "user_to_fictional",
           credit_cost: 1,
           is_read: false,
+          was_masked: wasMasked, // ✅ Track masked messages
         })
         .select()
         .single();
@@ -1452,6 +1464,56 @@ app.post("/operator/send-reply", async (req, res) => {
       .select("active_operator_id, active_operator_device, active_operator_at")
       .eq("id", conversation_id)
       .single();
+
+    // ✅ ADD THIS RIGHT AFTER the device ownership validation:
+    // ✅ NEW: Validate operator message BEFORE sending
+    if (content) {
+      const { isBlocked, canSend } = await validateOperatorMessage(
+        content,
+        operator_id,
+      );
+
+      if (!canSend) {
+        console.log(`🚨 OPERATOR VIOLATION: Operator ${operator_id} blocked`);
+
+        // 1. Block the message
+        // 2. Release the queue item back to pending
+        await supabase
+          .from("message_queue")
+          .update({
+            status: "pending",
+            assigned_operator_id: null,
+            assigned_at: null,
+            expires_at: null,
+            conversation_assigned: false,
+          })
+          .eq("id", queue_id)
+          .eq("status", "assigned");
+
+        // 3. Clear conversation ownership
+        await supabase
+          .from("conversations")
+          .update({
+            active_operator_id: null,
+            active_operator_device: null,
+            active_operator_at: null,
+          })
+          .eq("id", conversation_id);
+
+        // 4. Logout operator
+        await supabase
+          .from("operator_sessions")
+          .update({ status: "offline" })
+          .eq("operator_id", operator_id);
+
+        return res.status(403).json({
+          error:
+            "Message blocked - contact information detected. Your account has been flagged.",
+          logout: true,
+          message_blocked: true,
+        });
+      }
+    }
 
     if (conversationError) {
       console.error("❌ Ownership check error:", conversationError);
