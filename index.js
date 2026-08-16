@@ -3448,7 +3448,7 @@ app.get("/manager/conversations", async (req, res) => {
         operator_type: operatorTypeValue,
         messages: messages || [],
         // ✅ NEW: Add credits data
-        userCredits: userCredits,
+        user_credits: userCredits,
         transactions: userTransactions,
       });
     }
