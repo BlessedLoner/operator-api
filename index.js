@@ -65,6 +65,40 @@ app.get("/debug/credits/:profileId", async (req, res) => {
   }
 });
 
+app.get("/debug/credits/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    console.log("🔎 DEBUG CREDIT LOOKUP");
+    console.log("userId:", userId);
+    console.log("SUPABASE_URL:", process.env.SUPABASE_URL);
+
+    const { data, error } = await supabase
+      .from("credits")
+      .select("*")
+      .eq("user_id", userId);
+
+    console.log("🔎 DEBUG RESULT:", {
+      data,
+      error,
+      count: data?.length,
+    });
+
+    return res.json({
+      success: true,
+      data,
+      error,
+    });
+  } catch (err) {
+    console.error("DEBUG CREDIT ERROR:", err);
+
+    return res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
 // ✅ Health check
 app.get("/", (_req, res) => {
   res.send("Operator API running");
@@ -961,27 +995,33 @@ app.get("/operator/current-message", async (req, res) => {
 
       let userCredits = null;
 
-      if (userProfile?.id) {
-        console.log("💳 Fetching credits for profile:", userProfile.id);
+      let userCredits = null;
 
-        const { data: credits, error: creditsError } = await supabase
-          .from("credits")
-          .select("user_id, balance, created_at")
-          .eq("user_id", userProfile.id)
-          .maybeSingle();
-
-        console.log("💳 CURRENT MESSAGE CREDIT RESULT:", {
-          profileId: userProfile.id,
-          credits,
-          error: creditsError,
-        });
-
-        if (creditsError) {
-          console.error("❌ Failed to fetch user credits:", creditsError);
-        } else {
-          userCredits = credits;
-        }
+      if (credits && credits.length > 0) {
+        userCredits = credits[0];
       }
+
+      console.log("💳 ===============================");
+      console.log("💳 CREDIT LOOKUP START");
+      console.log("💳 Profile ID:", userProfile?.id);
+      console.log("💳 Profile ID type:", typeof userProfile?.id);
+      console.log("💳 Supabase URL:", process.env.SUPABASE_URL);
+
+      const { data: credits, error: creditsError } = await supabase
+        .from("credits")
+        .select("*")
+        .eq("user_id", userProfile.id);
+
+      console.log("💳 CREDIT LOOKUP RESULT:");
+      console.log("💳 data:", credits);
+      console.log("💳 error:", creditsError);
+      console.log("💳 number of rows:", credits?.length);
+
+      if (creditsError) {
+        console.error("❌ CREDIT QUERY ERROR:", creditsError);
+      }
+
+      console.log("💳 ===============================");
 
       // Refresh ownership for current active queue
       await supabase
@@ -1024,7 +1064,7 @@ app.get("/operator/current-message", async (req, res) => {
         fictionalProfile: queueItem.conversations.fictional_profiles,
         expiresAt: queueItem.expires_at,
         // ✅ NEW: Add user credits to response
-        userCredits: userCredits,
+        userCredits,
       });
     }
 
