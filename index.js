@@ -316,6 +316,31 @@ app.get("/shuffle-profiles", async (req, res) => {
   }
 });
 
+const getUserCredits = async (profileId) => {
+  if (!profileId) return null;
+
+  const { data, error } = await supabase
+    .from("credits")
+    .select("user_id, balance, created_at")
+    .eq("user_id", profileId)
+    .maybeSingle();
+
+  if (error) {
+    console.error("❌ Failed to fetch user credits:", error);
+    return null;
+  }
+
+  return data;
+};
+
+const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+console.log({
+  exists: !!key,
+  length: key?.length,
+  prefix: key?.substring(0, 10),
+});
+
 // ==========================
 // OPERATOR ROUTES
 // ==========================
@@ -428,7 +453,7 @@ app.post("/operator/next-conversation", async (req, res) => {
         .eq("sender_type", "real_user")
         .order("created_at", { ascending: true });
 
-        const operatorMessages = maskMessagesForOperator(messages || []);
+      const operatorMessages = maskMessagesForOperator(messages || []);
 
       return res.json({
         assigned: true,
@@ -502,7 +527,7 @@ app.post("/operator/next-conversation", async (req, res) => {
       .eq("sender_type", "real_user")
       .order("created_at", { ascending: true });
 
-      const operatorMessages = maskMessagesForOperator(messages || []);
+    const operatorMessages = maskMessagesForOperator(messages || []);
 
     res.json({
       assigned: true,
@@ -817,8 +842,6 @@ app.get("/operator/stats", async (req, res) => {
 // ==========================
 // OPERATOR QUEUE & DISTRIBUTION ENDPOINTS
 // ==========================
-
-// Get operator's current assigned message (for waiting room)
 // Get operator's current assigned message (for waiting room)
 app.get("/operator/current-message", async (req, res) => {
   try {
@@ -932,19 +955,8 @@ app.get("/operator/current-message", async (req, res) => {
     if (queueItem) {
       // ✅ NEW: Fetch user credits
       const userProfile = queueItem.conversations?.user_profiles;
-      let userCredits = null;
 
-      if (userProfile?.id) {
-        const { data: credits, error: creditsError } = await supabase
-          .from("credits")
-          .select("*")
-          .eq("user_id", userProfile.id)
-          .maybeSingle();
-
-        if (!creditsError && credits) {
-          userCredits = credits;
-        }
-      }
+      const userCredits = await getUserCredits(userProfile?.id);
 
       // Refresh ownership for current active queue
       await supabase
@@ -987,7 +999,7 @@ app.get("/operator/current-message", async (req, res) => {
         fictionalProfile: queueItem.conversations.fictional_profiles,
         expiresAt: queueItem.expires_at,
         // ✅ NEW: Add user credits to response
-        userCredits: userCredits,
+        userCredits,
       });
     }
 
@@ -1078,15 +1090,8 @@ app.post("/operator/assign-next", async (req, res) => {
           .single();
 
         // ✅ NEW: Fetch user credits
-        let userCredits = null;
-        if (conversation?.user_profiles?.id) {
-          const { data: credits } = await supabase
-            .from("credits")
-            .select("*")
-            .eq("user_id", conversation.user_profiles.id)
-            .maybeSingle();
-          userCredits = credits;
-        }
+        const userProfile = conversation?.user_profiles;
+        const userCredits = await getUserCredits(userProfile?.id);
 
         // Get all unread messages for this conversation
         const { data: messages, error: messagesError } = await supabase
@@ -1114,7 +1119,7 @@ app.post("/operator/assign-next", async (req, res) => {
           fictionalProfile: conversation.fictional_profiles,
           expiresAt: existingAssigned.expires_at,
           // ✅ NEW: Add user credits to response
-          userCredits: userCredits,
+          userCredits,
         });
       }
 
