@@ -33,20 +33,14 @@ const supabase = createClient(
 console.log("🔐 Supabase backend client initialized");
 console.log("🔐 Using service role:", !!process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-app.get("/debug/credits/:profileId", async (req, res) => {
+app.get("/debug/test-service-role", async (req, res) => {
   try {
-    const { profileId } = req.params;
-
-    console.log("🔍 DEBUG CREDIT LOOKUP:", profileId);
-
     const { data, error } = await supabase
       .from("credits")
-      .select("*")
-      .eq("user_id", profileId)
-      .maybeSingle();
+      .select("user_id, balance")
+      .limit(5);
 
-    console.log("💳 DEBUG CREDIT RESULT:", {
-      profileId,
+    console.log("🔐 SERVICE ROLE TEST:", {
       data,
       error,
     });
@@ -54,12 +48,13 @@ app.get("/debug/credits/:profileId", async (req, res) => {
     return res.json({
       success: !error,
       data,
-      error: error?.message || null,
+      error,
     });
   } catch (err) {
-    console.error("❌ DEBUG ERROR:", err);
+    console.error("❌ SERVICE ROLE TEST ERROR:", err);
 
-    res.status(500).json({
+    return res.status(500).json({
+      success: false,
       error: err.message,
     });
   }
