@@ -65,40 +65,6 @@ app.get("/debug/credits/:profileId", async (req, res) => {
   }
 });
 
-app.get("/debug/credits/:userId", async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    console.log("🔎 DEBUG CREDIT LOOKUP");
-    console.log("userId:", userId);
-    console.log("SUPABASE_URL:", process.env.SUPABASE_URL);
-
-    const { data, error } = await supabase
-      .from("credits")
-      .select("*")
-      .eq("user_id", userId);
-
-    console.log("🔎 DEBUG RESULT:", {
-      data,
-      error,
-      count: data?.length,
-    });
-
-    return res.json({
-      success: true,
-      data,
-      error,
-    });
-  } catch (err) {
-    console.error("DEBUG CREDIT ERROR:", err);
-
-    return res.status(500).json({
-      success: false,
-      error: err.message,
-    });
-  }
-});
-
 // ✅ Health check
 app.get("/", (_req, res) => {
   res.send("Operator API running");
