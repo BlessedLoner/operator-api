@@ -345,23 +345,6 @@ app.get("/shuffle-profiles", async (req, res) => {
   }
 });
 
-const getUserCredits = async (profileId) => {
-  if (!profileId) return null;
-
-  const { data, error } = await supabase
-    .from("credits")
-    .select("user_id, balance, created_at")
-    .eq("user_id", profileId)
-    .maybeSingle();
-
-  if (error) {
-    console.error("❌ Failed to fetch user credits:", error);
-    return null;
-  }
-
-  return data;
-};
-
 // ==========================
 // OPERATOR ROUTES
 // ==========================
@@ -974,10 +957,31 @@ app.get("/operator/current-message", async (req, res) => {
     }
 
     if (queueItem) {
-      // ✅ NEW: Fetch user credits
       const userProfile = queueItem.conversations?.user_profiles;
 
-      const userCredits = await getUserCredits(userProfile?.id);
+      let userCredits = null;
+
+      if (userProfile?.id) {
+        console.log("💳 Fetching credits for profile:", userProfile.id);
+
+        const { data: credits, error: creditsError } = await supabase
+          .from("credits")
+          .select("user_id, balance, created_at")
+          .eq("user_id", userProfile.id)
+          .maybeSingle();
+
+        console.log("💳 CURRENT MESSAGE CREDIT RESULT:", {
+          profileId: userProfile.id,
+          credits,
+          error: creditsError,
+        });
+
+        if (creditsError) {
+          console.error("❌ Failed to fetch user credits:", creditsError);
+        } else {
+          userCredits = credits;
+        }
+      }
 
       // Refresh ownership for current active queue
       await supabase
@@ -1020,7 +1024,7 @@ app.get("/operator/current-message", async (req, res) => {
         fictionalProfile: queueItem.conversations.fictional_profiles,
         expiresAt: queueItem.expires_at,
         // ✅ NEW: Add user credits to response
-        userCredits,
+        userCredits: userCredits,
       });
     }
 
@@ -1111,8 +1115,32 @@ app.post("/operator/assign-next", async (req, res) => {
           .single();
 
         // ✅ NEW: Fetch user credits
-        const userProfile = conversation?.user_profiles;
-        const userCredits = await getUserCredits(userProfile?.id);
+        let userCredits = null;
+
+        if (conversation?.user_profiles?.id) {
+          console.log(
+            "💳 ASSIGN-NEXT existing conversation - fetching credits:",
+            conversation.user_profiles.id,
+          );
+
+          const { data: credits, error: creditsError } = await supabase
+            .from("credits")
+            .select("user_id, balance, created_at")
+            .eq("user_id", conversation.user_profiles.id)
+            .maybeSingle();
+
+          console.log("💳 ASSIGN-NEXT EXISTING CREDIT RESULT:", {
+            profileId: conversation.user_profiles.id,
+            credits,
+            error: creditsError,
+          });
+
+          if (creditsError) {
+            console.error("❌ Failed to fetch user credits:", creditsError);
+          } else {
+            userCredits = credits;
+          }
+        }
 
         // Get all unread messages for this conversation
         const { data: messages, error: messagesError } = await supabase
@@ -1140,7 +1168,7 @@ app.post("/operator/assign-next", async (req, res) => {
           fictionalProfile: conversation.fictional_profiles,
           expiresAt: existingAssigned.expires_at,
           // ✅ NEW: Add user credits to response
-          userCredits,
+          userCredits: userCredits,
         });
       }
 
@@ -1272,15 +1300,25 @@ app.post("/operator/assign-next", async (req, res) => {
       }
       const userProfile = selectedMessage.conversations?.user_profiles;
 
-      // Fetch user's credits
       let userCredits = null;
 
       if (userProfile?.id) {
+        console.log(
+          "💳 ASSIGN-NEXT new conversation - fetching credits:",
+          userProfile.id,
+        );
+
         const { data: credits, error: creditsError } = await supabase
           .from("credits")
-          .select("*")
+          .select("user_id, balance, created_at")
           .eq("user_id", userProfile.id)
           .maybeSingle();
+
+        console.log("💳 ASSIGN-NEXT NEW CREDIT RESULT:", {
+          profileId: userProfile.id,
+          credits,
+          error: creditsError,
+        });
 
         if (creditsError) {
           console.error("❌ Failed to fetch user credits:", creditsError);
