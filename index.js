@@ -5323,10 +5323,10 @@ app.post(
         .eq("date", today)
         .maybeSingle();
 
-      if (dailyCount && dailyCount.count >= 20) {
+      if (dailyCount && dailyCount.count >= 100) {
         return res.status(429).json({
           error:
-            "Daily limit reached (20 messages per day). Please try again tomorrow.",
+            "Daily limit reached (100 messages per day). Please try again tomorrow.",
         });
       }
 
@@ -5460,7 +5460,7 @@ app.post(
         conversationId: conversationId,
         messageId: message.id,
         is_new_conversation: isNewConversation,
-        remaining_daily: 19 - (dailyCount?.count || 0),
+        remaining_daily: 99 - (dailyCount?.count || 0),
       });
     } catch (err) {
       console.error("Send manual flirt error:", err);
