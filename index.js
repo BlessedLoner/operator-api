@@ -24,17 +24,46 @@ app.use("/payments/webhook", express.raw({ type: "application/json" }));
 
 app.use(express.json());
 
-console.log("SUPABASE_URL:", process.env.SUPABASE_URL);
-console.log(
-  "SERVICE_ROLE_KEY exists:",
-  !!process.env.SUPABASE_SERVICE_ROLE_KEY,
-);
-
 // ✅ Supabase service-role client (server-only)
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
+
+console.log("🔐 Supabase backend client initialized");
+console.log("🔐 Using service role:", !!process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+app.get("/debug/credits/:profileId", async (req, res) => {
+  try {
+    const { profileId } = req.params;
+
+    console.log("🔍 DEBUG CREDIT LOOKUP:", profileId);
+
+    const { data, error } = await supabase
+      .from("credits")
+      .select("*")
+      .eq("user_id", profileId)
+      .maybeSingle();
+
+    console.log("💳 DEBUG CREDIT RESULT:", {
+      profileId,
+      data,
+      error,
+    });
+
+    return res.json({
+      success: !error,
+      data,
+      error: error?.message || null,
+    });
+  } catch (err) {
+    console.error("❌ DEBUG ERROR:", err);
+
+    res.status(500).json({
+      error: err.message,
+    });
+  }
+});
 
 // ✅ Health check
 app.get("/", (_req, res) => {
@@ -332,14 +361,6 @@ const getUserCredits = async (profileId) => {
 
   return data;
 };
-
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-console.log({
-  exists: !!key,
-  length: key?.length,
-  prefix: key?.substring(0, 10),
-});
 
 // ==========================
 // OPERATOR ROUTES
