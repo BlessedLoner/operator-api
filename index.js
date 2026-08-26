@@ -265,6 +265,174 @@ app.post("/user/send-message", async (req, res) => {
   }
 });
 
+// ============================================================
+// ADMIN USERS ENDPOINT
+// Returns user profile + credits + Supabase Auth email
+// ============================================================
+
+app.get("/admin/users", async (req, res) => {
+  try {
+    console.log("👑 Admin users request received");
+
+    // --------------------------------------------------------
+    // 1. Get user profiles
+    // --------------------------------------------------------
+
+    const { data: profiles, error: profilesError } = await supabase
+      .from("user_profiles")
+      .select(
+        `
+        id,
+        user_id,
+        display_name,
+        age,
+        gender,
+        bio,
+        city,
+        state,
+        country,
+        height,
+        body_type,
+        eye_color,
+        hair_color,
+        marital_status,
+        profile_img,
+        interests,
+        role,
+        created_at
+      `,
+      )
+      .order("created_at", { ascending: false });
+
+    if (profilesError) {
+      console.error("❌ Failed to fetch user profiles:", profilesError);
+
+      return res.status(500).json({
+        success: false,
+        error: profilesError.message,
+      });
+    }
+
+    // --------------------------------------------------------
+    // 2. Get credits
+    // --------------------------------------------------------
+
+    const { data: credits, error: creditsError } = await supabase.from(
+      "credits",
+    ).select(`
+        user_id,
+        balance,
+        created_at
+      `);
+
+    if (creditsError) {
+      console.error("❌ Failed to fetch credits:", creditsError);
+
+      return res.status(500).json({
+        success: false,
+        error: creditsError.message,
+      });
+    }
+
+    // --------------------------------------------------------
+    // 3. Create quick credit lookup
+    // --------------------------------------------------------
+
+    const creditMap = new Map();
+
+    for (const credit of credits || []) {
+      creditMap.set(credit.user_id, {
+        balance: credit.balance,
+        created_at: credit.created_at,
+      });
+    }
+
+    // --------------------------------------------------------
+    // 4. Get Supabase Auth users
+    // --------------------------------------------------------
+
+    let authUsers = [];
+    let authPage = 1;
+    const authPerPage = 1000;
+
+    while (true) {
+      const { data: authData, error: authError } =
+        await supabase.auth.admin.listUsers({
+          page: authPage,
+          perPage: authPerPage,
+        });
+
+      if (authError) {
+        console.error("❌ Failed to fetch Auth users:", authError);
+
+        return res.status(500).json({
+          success: false,
+          error: authError.message,
+        });
+      }
+
+      const pageUsers = authData?.users || [];
+
+      authUsers.push(...pageUsers);
+
+      if (pageUsers.length < authPerPage) {
+        break;
+      }
+
+      authPage++;
+    }
+
+    // --------------------------------------------------------
+    // 5. Create Auth email lookup
+    // --------------------------------------------------------
+
+    const authMap = new Map();
+
+    for (const authUser of authUsers) {
+      authMap.set(authUser.id, {
+        email: authUser.email || null,
+      });
+    }
+
+    // --------------------------------------------------------
+    // 6. Combine everything
+    // --------------------------------------------------------
+
+    const users = (profiles || []).map((profile) => {
+      const credit = creditMap.get(profile.id);
+      const authUser = authMap.get(profile.user_id);
+
+      return {
+        ...profile,
+
+        email: authUser?.email || null,
+
+        credits: credit
+          ? {
+              balance: credit.balance,
+              created_at: credit.created_at,
+            }
+          : null,
+      };
+    });
+
+    console.log(`✅ Admin users loaded: ${users.length}`);
+
+    return res.json({
+      success: true,
+      users,
+      count: users.length,
+    });
+  } catch (err) {
+    console.error("❌ Admin users endpoint error:", err);
+
+    return res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
 app.get("/shuffle-profiles", async (req, res) => {
   try {
     console.log("🔀 Starting weighted profile shuffle...");
