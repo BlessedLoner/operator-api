@@ -954,12 +954,6 @@ app.get("/operator/current-message", async (req, res) => {
     if (queueItem) {
       const userProfile = queueItem.conversations?.user_profiles;
 
-      console.log("========== CREDIT DEBUG ==========");
-      console.log("Conversation ID:", queueItem.conversation_id);
-      console.log("User profile object:", userProfile);
-      console.log("User profile ID:", userProfile?.id);
-      console.log("==================================");
-
       let userCredits = null;
 
       let userCredits = {
