@@ -956,10 +956,11 @@ app.get("/operator/current-message", async (req, res) => {
 
       let userCredits = null;
 
-      let userCredits = {
-        user_id: userProfile?.id ?? null,
-        balance: 0,
-      };
+      console.log("========== CREDIT DEBUG ==========");
+      console.log("Conversation ID:", queueItem.conversation_id);
+      console.log("User profile object:", userProfile);
+      console.log("User profile ID:", userProfile?.id);
+      console.log("==================================");
 
       if (userProfile?.id) {
         console.log("💳 Fetching credits for profile:", userProfile.id);
@@ -986,6 +987,12 @@ app.get("/operator/current-message", async (req, res) => {
           console.warn("⚠️ No credits row found for profile:", userProfile.id);
         }
       }
+
+      console.log("========== CREDIT RESULT ==========");
+      console.log("Looking for credits.user_id:", userProfile?.id);
+      console.log("Credit row:", credits);
+      console.log("Credit error:", creditsError);
+      console.log("==================================");
 
       // Refresh ownership for current active queue
       await supabase
