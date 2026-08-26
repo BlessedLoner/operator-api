@@ -35,7 +35,10 @@ console.log("🔐 Using service role:", !!process.env.SUPABASE_SERVICE_ROLE_KEY)
 
 app.get("/debug/test-service-role", async (req, res) => {
   try {
-    const { data, error } = await supabase.from("credits").select("*").limit(5);
+    const { data, error } = await supabase
+      .from("credits")
+      .select("user_id, balance")
+      .limit(5);
 
     console.log("🔐 SERVICE ROLE TEST:", {
       data,
@@ -989,12 +992,6 @@ app.get("/operator/current-message", async (req, res) => {
           console.warn("⚠️ No credits row found for profile:", userProfile.id);
         }
       }
-
-      console.log("========== CREDIT RESULT ==========");
-      console.log("Looking for credits.user_id:", userProfile?.id);
-      console.log("Credit row:", credits);
-      console.log("Credit error:", creditsError);
-      console.log("==================================");
 
       // Refresh ownership for current active queue
       await supabase
