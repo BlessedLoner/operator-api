@@ -956,43 +956,37 @@ app.get("/operator/current-message", async (req, res) => {
 
       let userCredits = null;
 
-      console.log("========== CREDIT DEBUG ==========");
-      console.log("Conversation ID:", queueItem.conversation_id);
-      console.log("User profile object:", userProfile);
-      console.log("User profile ID:", userProfile?.id);
-      console.log("==================================");
-
       if (userProfile?.id) {
-        console.log("💳 Fetching credits for profile:", userProfile.id);
+        const profileId = userProfile.id;
 
-        const { data: credits, error: creditsError } = await supabase
+        console.log("====================================");
+        console.log("💳 CREDIT LOOKUP");
+        console.log("Profile ID:", profileId);
+        console.log("====================================");
+
+        const { data: creditRow, error: creditError } = await supabase
           .from("credits")
           .select("user_id, balance, created_at")
-          .eq("user_id", userProfile.id)
+          .eq("user_id", profileId)
+          .limit(1)
           .maybeSingle();
 
-        console.log("💳 CURRENT MESSAGE CREDIT RESULT:", {
-          profileId: userProfile.id,
-          credits,
-          error: creditsError,
+        console.log("💳 CREDIT LOOKUP RESULT:", {
+          profileId,
+          creditRow,
+          creditError,
         });
 
-        if (creditsError) {
-          console.error("❌ Failed to fetch user credits:", creditsError);
-        } else if (credits) {
-          console.log("✅ USER CREDITS FOUND:", credits.balance);
-
-          userCredits = credits;
+        if (creditError) {
+          console.error("❌ CREDIT QUERY ERROR:", creditError);
+        } else if (!creditRow) {
+          console.warn("⚠️ NO CREDIT ROW FOUND FOR PROFILE:", profileId);
         } else {
-          console.warn("⚠️ No credits row found for profile:", userProfile.id);
+          console.log("✅ CREDIT FOUND:", creditRow);
+
+          userCredits = creditRow;
         }
       }
-
-      console.log("========== CREDIT RESULT ==========");
-      console.log("Looking for credits.user_id:", userProfile?.id);
-      console.log("Credit row:", credits);
-      console.log("Credit error:", creditsError);
-      console.log("==================================");
 
       // Refresh ownership for current active queue
       await supabase
