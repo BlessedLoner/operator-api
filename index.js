@@ -35,29 +35,23 @@ console.log("🔐 Using service role:", !!process.env.SUPABASE_SERVICE_ROLE_KEY)
 
 app.get("/debug/test-service-role", async (req, res) => {
   try {
-    console.log("========== SERVICE ROLE CREDIT DEBUG AGAIN==========");
+    console.log("========== SERVICE ROLE TEST ==========");
 
-    const { data, error, count } = await supabase
+    const { data, error } = await supabase
       .from("credits")
-      .select("user_id, balance, created_at, updated_at", {
-        count: "exact",
-      })
+      .select("user_id, balance")
       .limit(5);
 
-    console.log("🔐 SERVICE ROLE CREDIT RESULT:", {
-      data,
-      count,
-      error,
-    });
+    console.log("CREDIT DATA:", data);
+    console.log("CREDIT ERROR:", error);
 
     return res.json({
       success: !error,
       data,
-      count,
       error,
     });
   } catch (err) {
-    console.error("❌ SERVICE ROLE TEST ERROR:", err);
+    console.error("SERVICE ROLE TEST CRASH:", err);
 
     return res.status(500).json({
       success: false,
@@ -65,6 +59,7 @@ app.get("/debug/test-service-role", async (req, res) => {
     });
   }
 });
+
 app.get("/debug/backend-identity", async (req, res) => {
   try {
     const { data, error } = await supabase.rpc(
