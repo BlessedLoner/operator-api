@@ -35,7 +35,7 @@ console.log("🔐 Using service role:", !!process.env.SUPABASE_SERVICE_ROLE_KEY)
 
 app.get("/debug/test-service-role", async (req, res) => {
   try {
-    console.log("========== SERVICE ROLE CREDIT DEBUG ==========");
+    console.log("========== SERVICE ROLE CREDIT DEBUG AGAIN==========");
 
     const { data, error, count } = await supabase
       .from("credits")
