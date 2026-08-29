@@ -35,23 +35,62 @@ console.log("🔐 Using service role:", !!process.env.SUPABASE_SERVICE_ROLE_KEY)
 
 app.get("/debug/test-service-role", async (req, res) => {
   try {
-    console.log("========== SERVICE ROLE TEST ==========");
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-    const { data, error } = await supabase
+    if (!key) {
+      return res.status(500).json({
+        success: false,
+        error: "SUPABASE_SERVICE_ROLE_KEY is missing",
+      });
+    }
+
+    // Inspect JWT payload WITHOUT exposing the secret itself.
+    let keyInfo = {
+      length: key.length,
+      prefix: key.substring(0, 20),
+      type: "unknown",
+    };
+
+    // Legacy anon/service_role keys are JWTs.
+    if (key.split(".").length === 3) {
+      try {
+        const payload = JSON.parse(
+          Buffer.from(key.split(".")[1], "base64url").toString("utf8"),
+        );
+
+        keyInfo.type = "JWT";
+        keyInfo.role = payload.role || null;
+        keyInfo.ref = payload.ref || null;
+        keyInfo.exp = payload.exp || null;
+        keyInfo.iss = payload.iss || null;
+      } catch (decodeError) {
+        keyInfo.type = "JWT but payload could not be decoded";
+      }
+    }
+
+    console.log("🔐 BACKEND KEY INFO:", keyInfo);
+
+    // Actual database test
+    const { data, error, count } = await supabase
       .from("credits")
-      .select("user_id, balance")
+      .select("user_id, balance", { count: "exact" })
       .limit(5);
 
-    console.log("CREDIT DATA:", data);
-    console.log("CREDIT ERROR:", error);
+    console.log("🔐 SERVICE ROLE CREDIT TEST:", {
+      data,
+      error,
+      count,
+    });
 
     return res.json({
       success: !error,
+      keyInfo,
       data,
+      count,
       error,
     });
   } catch (err) {
-    console.error("SERVICE ROLE TEST CRASH:", err);
+    console.error("❌ SERVICE ROLE TEST ERROR:", err);
 
     return res.status(500).json({
       success: false,
