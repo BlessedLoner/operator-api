@@ -30,6 +30,17 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
+const serviceSupabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  }
+);
+
 console.log("🔐 Supabase backend client initialized");
 console.log("🔐 Using service role:", !!process.env.SUPABASE_SERVICE_ROLE_KEY);
 
@@ -71,7 +82,7 @@ app.get("/debug/test-service-role", async (req, res) => {
     console.log("🔐 BACKEND KEY INFO:", keyInfo);
 
     // Actual database test
-    const { data, error, count } = await supabase
+    const { data, error, count } = await serviceSupabase
       .from("credits")
       .select("user_id, balance", { count: "exact" })
       .limit(5);
