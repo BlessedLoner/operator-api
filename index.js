@@ -393,7 +393,7 @@ app.get("/admin/users", async (req, res) => {
     // 2. Get credits
     // --------------------------------------------------------
 
-    const { data: credits, error: creditsError } = await supabase.from(
+    const { data: credits, error: creditsError } = await  serviceSupabase.from(
       "credits",
     ).select(`
         user_id,
@@ -1208,7 +1208,7 @@ app.get("/operator/current-message", async (req, res) => {
         console.log("Profile ID:", profileId);
         console.log("====================================");
 
-        const { data: creditRow, error: creditError } = await supabase
+        const { data: creditRow, error: creditError } = await  serviceSupabase
           .from("credits")
           .select("user_id, balance, created_at")
           .eq("user_id", profileId)
@@ -1372,7 +1372,7 @@ app.post("/operator/assign-next", async (req, res) => {
             conversation.user_profiles.id,
           );
 
-          const { data: credits, error: creditsError } = await supabase
+          const { data: credits, error: creditsError } = await  serviceSupabase
             .from("credits")
             .select("user_id, balance, created_at")
             .eq("user_id", conversation.user_profiles.id)
@@ -1557,7 +1557,7 @@ app.post("/operator/assign-next", async (req, res) => {
           userProfile.id,
         );
 
-        const { data: credits, error: creditsError } = await supabase
+        const { data: credits, error: creditsError } = await  serviceSupabase
           .from("credits")
           .select("user_id, balance, created_at")
           .eq("user_id", userProfile.id)
@@ -3727,7 +3727,7 @@ app.get("/manager/conversations", async (req, res) => {
     // ✅ NEW: Fetch credits for all users in one query
     let creditsMap = new Map();
     if (paginatedUserIds.length > 0) {
-      const { data: credits } = await supabase
+      const { data: credits } = await  serviceSupabase
         .from("credits")
         .select("*")
         .in("user_id", paginatedUserIds);
