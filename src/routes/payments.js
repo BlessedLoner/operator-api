@@ -9,6 +9,60 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
 );
 
+// ==========================================
+// AUTHENTICATE SUPABASE USER FROM BEARER TOKEN
+// ==========================================
+async function getAuthenticatedUser(req) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return {
+      user: null,
+      error: "Missing or invalid Authorization header",
+    };
+  }
+
+  const token = authHeader.replace("Bearer ", "").trim();
+
+  if (!token) {
+    return {
+      user: null,
+      error: "Missing access token",
+    };
+  }
+
+  try {
+    // Use Supabase Auth to validate the user's access token.
+    // The service-role client is NOT used to trust the browser.
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
+      console.error("❌ Supabase authentication failed:", error);
+
+      return {
+        user: null,
+        error: "Invalid or expired authentication token",
+      };
+    }
+
+    return {
+      user,
+      error: null,
+    };
+  } catch (err) {
+    console.error("❌ Authentication error:", err);
+
+    return {
+      user: null,
+      error: "Authentication failed",
+    };
+  }
+}
+
+
 //
 // ==========================
 // STRIPE WEBHOOK (CRITICAL)
@@ -83,6 +137,187 @@ router.post(
     res.json({ received: true });
   },
 );
+
+
+//
+// ==========================================
+// CREATE PAYMENT INTENT
+// ==========================================
+// New custom payment-page flow.
+// This does NOT replace /create-session yet.
+//
+router.post("/create-payment-intent", async (req, res) => {
+  try {
+    const { package_id } = req.body;
+
+    // ------------------------------------------
+    // STEP 1: Validate package ID
+    // ------------------------------------------
+    if (!package_id) {
+      return res.status(400).json({
+        error: "Missing package_id",
+      });
+    }
+
+    // ------------------------------------------
+    // STEP 2: Authenticate the Supabase user
+    // ------------------------------------------
+    const { user, error: authError } = await getAuthenticatedUser(req);
+
+    if (authError || !user) {
+      return res.status(401).json({
+        error: authError || "Unauthorized",
+      });
+    }
+
+    console.log("💳 Creating PaymentIntent for auth user:", user.id);
+
+    // ------------------------------------------
+    // STEP 3: Find this user's profile
+    // ------------------------------------------
+    const { data: profile, error: profileError } = await supabase
+      .from("user_profiles")
+      .select("id")
+      .eq("user_id", user.id)
+      .single();
+
+    if (profileError || !profile) {
+      console.error("❌ User profile not found:", {
+        authUserId: user.id,
+        error: profileError,
+      });
+
+      return res.status(404).json({
+        error: "User profile not found",
+      });
+    }
+
+    console.log("👤 Payment profile:", profile.id);
+
+    // ------------------------------------------
+    // STEP 4: Get package FROM DATABASE
+    // ------------------------------------------
+    // IMPORTANT:
+    // We do NOT trust the frontend for:
+    // - price
+    // - credits
+    // - bonus credits
+    //
+    // The database is the source of truth.
+    // ------------------------------------------
+    const { data: pkg, error: packageError } = await supabase
+      .from("credit_packages")
+      .select(
+        "id, name, credits, bonus_credits, price_usd, active",
+      )
+      .eq("id", package_id)
+      .eq("active", true)
+      .single();
+
+    if (packageError || !pkg) {
+      console.error("❌ Credit package not found:", {
+        package_id,
+        error: packageError,
+      });
+
+      return res.status(404).json({
+        error: "Credit package not found or inactive",
+      });
+    }
+
+    // ------------------------------------------
+    // STEP 5: Calculate Stripe amount
+    // ------------------------------------------
+    const price = Number(pkg.price_usd);
+
+    if (!Number.isFinite(price) || price <= 0) {
+      console.error("❌ Invalid package price:", pkg);
+
+      return res.status(400).json({
+        error: "Invalid credit package price",
+      });
+    }
+
+    const amount = Math.round(price * 100);
+
+    if (amount < 50) {
+      return res.status(400).json({
+        error: "Payment amount is below Stripe's minimum allowed amount",
+      });
+    }
+
+    const totalCredits =
+      Number(pkg.credits || 0) + Number(pkg.bonus_credits || 0);
+
+    if (totalCredits <= 0) {
+      return res.status(400).json({
+        error: "Invalid credit package amount",
+      });
+    }
+
+    console.log("💰 Payment package:", {
+      packageId: pkg.id,
+      name: pkg.name,
+      priceUsd: price,
+      stripeAmount: amount,
+      credits: pkg.credits,
+      bonusCredits: pkg.bonus_credits || 0,
+      totalCredits,
+    });
+
+    // ------------------------------------------
+    // STEP 6: Create Stripe PaymentIntent
+    // ------------------------------------------
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount,
+      currency: "usd",
+
+      automatic_payment_methods: {
+        enabled: true,
+      },
+
+      metadata: {
+        user_profile_id: profile.id,
+        auth_user_id: user.id,
+        package_id: pkg.id,
+        credits: String(pkg.credits || 0),
+        bonus_credits: String(pkg.bonus_credits || 0),
+        total_credits: String(totalCredits),
+      },
+
+      description: `${pkg.name} - ${totalCredits} credits`,
+    });
+
+    console.log("✅ PaymentIntent created:", paymentIntent.id);
+
+    // ------------------------------------------
+    // STEP 7: Return only what frontend needs
+    // ------------------------------------------
+    return res.json({
+      success: true,
+      clientSecret: paymentIntent.client_secret,
+
+      paymentIntentId: paymentIntent.id,
+
+      package: {
+        id: pkg.id,
+        name: pkg.name,
+        credits: pkg.credits,
+        bonus_credits: pkg.bonus_credits || 0,
+        total_credits: totalCredits,
+        price_usd: price,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Create PaymentIntent error:", err);
+
+    return res.status(500).json({
+      error: "Failed to create payment",
+    });
+  }
+});
+
+
 
 //
 // ==========================
