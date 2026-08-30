@@ -62,6 +62,27 @@ async function getAuthenticatedUser(req) {
   }
 }
 
+router.get("/debug-stripe-account", async (req, res) => {
+  try {
+    const account = await stripe.accounts.retrieve();
+
+    return res.json({
+      success: true,
+      account_id: account.id,
+      livemode: account.livemode,
+      country: account.country,
+      default_currency: account.default_currency,
+    });
+  } catch (err) {
+    console.error("Stripe account debug error:", err);
+
+    return res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
+});
+
 
 //
 // ==========================
