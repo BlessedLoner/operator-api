@@ -83,7 +83,6 @@ router.get("/debug-stripe-account", async (req, res) => {
   }
 });
 
-
 //
 // ==========================
 // STRIPE WEBHOOK (CRITICAL)
@@ -108,57 +107,217 @@ router.post(
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // ✅ Only handle successful payments
-    if (event.type === "checkout.session.completed") {
-      const session = event.data.object;
-      const eventId = event.id;
+    console.log("📦 Stripe webhook received:", event.type);
 
-      const user_profile_id = session.metadata.user_profile_id;
-      const credits = Number(session.metadata.credits || 0);
-      const bonus = Number(session.metadata.bonus_credits || 0);
-      const totalCredits = credits + bonus;
+    try {
+      // =====================================================
+      // NEW PAYMENTINTENT FLOW
+      // =====================================================
+      if (event.type === "payment_intent.succeeded") {
+        const paymentIntent = event.data.object;
 
-      try {
-        // 🔒 STEP 1: Check if already processed
-        const { data: existing } = await supabase
+        const eventId = event.id;
+
+        const user_profile_id = paymentIntent.metadata?.user_profile_id;
+
+        const credits = Number(paymentIntent.metadata?.credits || 0);
+
+        const bonus = Number(paymentIntent.metadata?.bonus_credits || 0);
+
+        const totalCredits = credits + bonus;
+
+        console.log("💳 PaymentIntent succeeded:", {
+          paymentIntentId: paymentIntent.id,
+          user_profile_id,
+          credits,
+          bonus,
+          totalCredits,
+        });
+
+        // Validate metadata
+        if (!user_profile_id) {
+          console.error(
+            "❌ PaymentIntent missing user_profile_id:",
+            paymentIntent.id,
+          );
+
+          return res.status(400).json({
+            error: "Missing user_profile_id",
+          });
+        }
+
+        if (totalCredits <= 0) {
+          console.error("❌ Invalid credit amount:", totalCredits);
+
+          return res.status(400).json({
+            error: "Invalid credit amount",
+          });
+        }
+
+        // =================================================
+        // PREVENT DUPLICATE CREDIT
+        // =================================================
+
+        const { data: existing, error: existingError } = await supabase
           .from("stripe_events")
           .select("id")
           .eq("id", eventId)
           .maybeSingle();
 
-        if (existing) {
-          console.log("⚠️ Event already processed:", eventId);
-          return res.json({ received: true });
+        if (existingError) {
+          throw existingError;
         }
 
-        // 💰 STEP 2: Add credits
+        if (existing) {
+          console.log("⚠️ Webhook already processed:", eventId);
+
+          return res.json({
+            received: true,
+            alreadyProcessed: true,
+          });
+        }
+
+        // =================================================
+        // ADD CREDITS
+        // =================================================
+
         const { error: creditError } = await supabase.rpc("add_credits", {
           p_user_id: user_profile_id,
           p_amount: totalCredits,
         });
 
-        if (creditError) throw creditError;
+        if (creditError) {
+          console.error("❌ Failed to add credits:", creditError);
 
-        // 🧾 STEP 3: Save event (prevents duplicates)
+          throw creditError;
+        }
+
+        console.log(`✅ Added ${totalCredits} credits to ${user_profile_id}`);
+
+        // =================================================
+        // RECORD WEBHOOK EVENT
+        // =================================================
+
         const { error: insertError } = await supabase
           .from("stripe_events")
-          .insert([{ id: eventId }]);
+          .insert([
+            {
+              id: eventId,
+            },
+          ]);
 
-        if (insertError) throw insertError;
+        if (insertError) {
+          throw insertError;
+        }
 
-        console.log(
-          `✅ Credits added: ${totalCredits} to user ${user_profile_id}`,
-        );
-      } catch (err) {
-        console.error("❌ Webhook processing error:", err);
-        return res.status(500).json({ error: "Webhook failed" });
+        console.log("✅ Stripe event recorded:", eventId);
       }
-    }
 
-    res.json({ received: true });
+      // =====================================================
+      // OLD CHECKOUT SESSION FLOW
+      // =====================================================
+      else if (event.type === "checkout.session.completed") {
+        const session = event.data.object;
+
+        const eventId = event.id;
+
+        const user_profile_id = session.metadata?.user_profile_id;
+
+        const credits = Number(session.metadata?.credits || 0);
+
+        const bonus = Number(session.metadata?.bonus_credits || 0);
+
+        const totalCredits = credits + bonus;
+
+        console.log("🛒 Checkout session completed:", {
+          sessionId: session.id,
+          user_profile_id,
+          credits,
+          bonus,
+          totalCredits,
+        });
+
+        if (!user_profile_id) {
+          console.error("❌ Checkout session missing user_profile_id");
+
+          return res.status(400).json({
+            error: "Missing user_profile_id",
+          });
+        }
+
+        if (totalCredits <= 0) {
+          return res.status(400).json({
+            error: "Invalid credit amount",
+          });
+        }
+
+        // Check duplicate
+        const { data: existing, error: existingError } = await supabase
+          .from("stripe_events")
+          .select("id")
+          .eq("id", eventId)
+          .maybeSingle();
+
+        if (existingError) {
+          throw existingError;
+        }
+
+        if (existing) {
+          console.log("⚠️ Checkout event already processed:", eventId);
+
+          return res.json({
+            received: true,
+            alreadyProcessed: true,
+          });
+        }
+
+        // Add credits
+        const { error: creditError } = await supabase.rpc("add_credits", {
+          p_user_id: user_profile_id,
+          p_amount: totalCredits,
+        });
+
+        if (creditError) {
+          throw creditError;
+        }
+
+        console.log(`✅ Added ${totalCredits} credits to ${user_profile_id}`);
+
+        // Record event
+        const { error: insertError } = await supabase
+          .from("stripe_events")
+          .insert([
+            {
+              id: eventId,
+            },
+          ]);
+
+        if (insertError) {
+          throw insertError;
+        }
+
+        console.log("✅ Checkout event recorded:", eventId);
+      }
+
+      // =====================================================
+      // OTHER EVENTS
+      // =====================================================
+      else {
+        console.log("ℹ️ Ignoring Stripe event:", event.type);
+      }
+
+      return res.json({
+        received: true,
+      });
+    } catch (err) {
+      console.error("❌ Webhook processing error:", err);
+
+      return res.status(500).json({
+        error: "Webhook processing failed",
+      });
+    }
   },
 );
-
 
 //
 // ==========================================
@@ -228,9 +387,7 @@ router.post("/create-payment-intent", async (req, res) => {
     // ------------------------------------------
     const { data: pkg, error: packageError } = await supabase
       .from("credit_packages")
-      .select(
-        "id, name, credits, bonus_credits, price_usd, active",
-      )
+      .select("id, name, credits, bonus_credits, price_usd, active")
       .eq("id", package_id)
       .eq("active", true)
       .single();
@@ -337,8 +494,6 @@ router.post("/create-payment-intent", async (req, res) => {
     });
   }
 });
-
-
 
 //
 // ==========================
