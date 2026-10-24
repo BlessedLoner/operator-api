@@ -38,10 +38,17 @@ const serviceSupabase = createClient(
       autoRefreshToken: false,
       persistSession: false,
     },
-  }
+  },
 );
 
 console.log("🔐 Supabase backend client initialized");
+
+// ✅ Operator photo sending is paused unless explicitly re-enabled
+// (set PRIVATE_PHOTOS_ENABLED=true to turn it back on)
+const PRIVATE_PHOTOS_ENABLED = process.env.PRIVATE_PHOTOS_ENABLED === "true";
+const PHOTOS_PAUSED_MESSAGE = "Photo sending is currently paused.";
+
+console.log("📷 Private photo sending enabled:", PRIVATE_PHOTOS_ENABLED);
 console.log("🔐 Using service role:", !!process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 app.get("/debug/test-service-role", async (req, res) => {
@@ -112,9 +119,7 @@ app.get("/debug/test-service-role", async (req, res) => {
 
 app.get("/debug/backend-identity", async (req, res) => {
   try {
-    const { data, error } = await supabase.rpc(
-      "debug_backend_identity"
-    );
+    const { data, error } = await supabase.rpc("debug_backend_identity");
 
     console.log("🔐 BACKEND IDENTITY:", {
       data,
@@ -393,7 +398,7 @@ app.get("/admin/users", async (req, res) => {
     // 2. Get credits
     // --------------------------------------------------------
 
-    const { data: credits, error: creditsError } = await  serviceSupabase.from(
+    const { data: credits, error: creditsError } = await serviceSupabase.from(
       "credits",
     ).select(`
         user_id,
@@ -1208,7 +1213,7 @@ app.get("/operator/current-message", async (req, res) => {
         console.log("Profile ID:", profileId);
         console.log("====================================");
 
-        const { data: creditRow, error: creditError } = await  serviceSupabase
+        const { data: creditRow, error: creditError } = await serviceSupabase
           .from("credits")
           .select("user_id, balance, created_at")
           .eq("user_id", profileId)
@@ -1372,7 +1377,7 @@ app.post("/operator/assign-next", async (req, res) => {
             conversation.user_profiles.id,
           );
 
-          const { data: credits, error: creditsError } = await  serviceSupabase
+          const { data: credits, error: creditsError } = await serviceSupabase
             .from("credits")
             .select("user_id, balance, created_at")
             .eq("user_id", conversation.user_profiles.id)
@@ -1557,7 +1562,7 @@ app.post("/operator/assign-next", async (req, res) => {
           userProfile.id,
         );
 
-        const { data: credits, error: creditsError } = await  serviceSupabase
+        const { data: credits, error: creditsError } = await serviceSupabase
           .from("credits")
           .select("user_id, balance, created_at")
           .eq("user_id", userProfile.id)
@@ -1728,9 +1733,11 @@ app.post("/operator/send-reply", async (req, res) => {
       fictional_profile_id,
       content,
       operator_id,
-      image_url,
       device_id,
     } = req.body;
+
+    // ✅ Drop any attached photo while photo sending is paused
+    const image_url = PRIVATE_PHOTOS_ENABLED ? req.body.image_url : null;
 
     console.log("📨 Send reply request:", {
       queue_id,
@@ -2141,6 +2148,11 @@ app.get("/operator/private-photos/:fictionalId", async (req, res) => {
     const { fictionalId } = req.params;
     const { conversation_id } = req.query;
 
+    // ✅ Show no photos to pick while photo sending is paused
+    if (!PRIVATE_PHOTOS_ENABLED) {
+      return res.json([]);
+    }
+
     const { data: photos, error } = await supabase
       .from("fictional_private_photos")
       .select("*")
@@ -2174,6 +2186,10 @@ app.get("/operator/private-photos/:fictionalId", async (req, res) => {
 // Send a private photo
 app.post("/operator/send-photo", async (req, res) => {
   try {
+    if (!PRIVATE_PHOTOS_ENABLED) {
+      return res.status(403).json({ error: PHOTOS_PAUSED_MESSAGE });
+    }
+
     const { photo_id, conversation_id, fictional_profile_id, operator_id } =
       req.body;
 
@@ -3214,8 +3230,10 @@ app.post("/stopped/send-message", async (req, res) => {
       fictional_profile_id,
       content,
       operator_id,
-      image_url,
     } = req.body;
+
+    // ✅ Drop any attached photo while photo sending is paused
+    const image_url = PRIVATE_PHOTOS_ENABLED ? req.body.image_url : null;
 
     if (
       !queue_id ||
@@ -3727,7 +3745,7 @@ app.get("/manager/conversations", async (req, res) => {
     // ✅ NEW: Fetch credits for all users in one query
     let creditsMap = new Map();
     if (paginatedUserIds.length > 0) {
-      const { data: credits } = await  serviceSupabase
+      const { data: credits } = await serviceSupabase
         .from("credits")
         .select("*")
         .in("user_id", paginatedUserIds);
