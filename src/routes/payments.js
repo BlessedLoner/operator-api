@@ -62,27 +62,6 @@ async function getAuthenticatedUser(req) {
   }
 }
 
-router.get("/debug-stripe-account", async (req, res) => {
-  try {
-    const account = await stripe.accounts.retrieve();
-
-    return res.json({
-      success: true,
-      account_id: account.id,
-      livemode: account.livemode,
-      country: account.country,
-      default_currency: account.default_currency,
-    });
-  } catch (err) {
-    console.error("Stripe account debug error:", err);
-
-    return res.status(500).json({
-      success: false,
-      error: err.message,
-    });
-  }
-});
-
 //
 // ==========================
 // STRIPE WEBHOOK (CRITICAL)
@@ -502,11 +481,29 @@ router.post("/create-payment-intent", async (req, res) => {
 //
 router.post("/create-session", async (req, res) => {
   try {
-    const { user_profile_id, package_id } = req.body;
+    // ✅ Identify the buyer from their Supabase session, not the request body
+    const { user, error: authError } = await getAuthenticatedUser(req);
+    if (authError || !user) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
 
-    if (!user_profile_id || !package_id) {
+    const { package_id } = req.body;
+
+    if (!package_id) {
       return res.status(400).json({ error: "Missing required fields" });
     }
+
+    const { data: profile, error: profileError } = await supabase
+      .from("user_profiles")
+      .select("id")
+      .eq("user_id", user.id)
+      .single();
+
+    if (profileError || !profile) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    const user_profile_id = profile.id;
 
     // ✅ Fetch package
     const { data: pkg, error } = await supabase

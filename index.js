@@ -4,6 +4,7 @@ import bcrypt from "bcrypt";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import paymentsRouter from "./src/routes/payments.js";
+import { createAuth, rateLimit, orFilterLike } from "./src/auth.js";
 import { sendNewMessageEmail } from "./src/services/emailService.js";
 // ✅ Add this:
 import {
@@ -17,7 +18,30 @@ dotenv.config();
 
 const app = express();
 
-app.use(cors());
+// Railway sits behind a proxy: trust the first hop so req.ip is the client.
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+
+// ✅ CORS: only allow the real front-end origins (comma-separated list in
+// CORS_ORIGINS, e.g. "https://strippals.com,https://operators.strippals.com").
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map((o) => o.trim().replace(/\/$/, ""))
+  .filter(Boolean);
+
+if (CORS_ORIGINS.length === 0) {
+  console.warn(
+    "⚠️ CORS_ORIGINS is not set - allowing ALL origins. Set it in production!",
+  );
+}
+
+app.use(
+  cors({
+    origin: CORS_ORIGINS.length === 0 ? true : CORS_ORIGINS,
+    allowedHeaders: ["Content-Type", "Authorization", "x-cron-secret"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  }),
+);
 
 // ✅ Stripe webhook MUST use raw body BEFORE json parser
 app.use("/payments/webhook", express.raw({ type: "application/json" }));
@@ -43,6 +67,29 @@ const serviceSupabase = createClient(
 
 console.log("🔐 Supabase backend client initialized");
 
+const {
+  signOperatorToken,
+  requireOperator,
+  requireManager,
+  requireRole,
+  requireSiteAdmin,
+} = createAuth(supabase);
+
+// Columns that are safe to send to the manager app (NEVER password_hash)
+const OPERATOR_SAFE_COLUMNS =
+  "id, username, email, full_name, role, operator_type, is_active, is_blocked, blocked_at, created_at, last_login, last_seen_at";
+const MANAGER_SAFE_COLUMNS =
+  "id, user_id, username, email, full_name, role, is_active, created_at";
+const MANAGER_ROLES = ["admin", "manager", "viewer"];
+
+// Login brute-force protection: 10 attempts per 15 min per IP + username
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  key: (req) =>
+    `${req.ip}|${String(req.body?.username || req.body?.email || "").toLowerCase()}`,
+});
+
 // ✅ Operator photo sending is paused unless explicitly re-enabled
 // (set PRIVATE_PHOTOS_ENABLED=true to turn it back on)
 const PRIVATE_PHOTOS_ENABLED = process.env.PRIVATE_PHOTOS_ENABLED === "true";
@@ -51,300 +98,29 @@ const PHOTOS_PAUSED_MESSAGE = "Photo sending is currently paused.";
 console.log("📷 Private photo sending enabled:", PRIVATE_PHOTOS_ENABLED);
 console.log("🔐 Using service role:", !!process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-app.get("/debug/test-service-role", async (req, res) => {
-  try {
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    if (!key) {
-      return res.status(500).json({
-        success: false,
-        error: "SUPABASE_SERVICE_ROLE_KEY is missing",
-      });
-    }
-
-    // Inspect JWT payload WITHOUT exposing the secret itself.
-    let keyInfo = {
-      length: key.length,
-      prefix: key.substring(0, 20),
-      type: "unknown",
-    };
-
-    // Legacy anon/service_role keys are JWTs.
-    if (key.split(".").length === 3) {
-      try {
-        const payload = JSON.parse(
-          Buffer.from(key.split(".")[1], "base64url").toString("utf8"),
-        );
-
-        keyInfo.type = "JWT";
-        keyInfo.role = payload.role || null;
-        keyInfo.ref = payload.ref || null;
-        keyInfo.exp = payload.exp || null;
-        keyInfo.iss = payload.iss || null;
-      } catch (decodeError) {
-        keyInfo.type = "JWT but payload could not be decoded";
-      }
-    }
-
-    console.log("🔐 BACKEND KEY INFO:", keyInfo);
-
-    // Actual database test
-    const { data, error, count } = await serviceSupabase
-      .from("credits")
-      .select("user_id, balance", { count: "exact" })
-      .limit(5);
-
-    console.log("🔐 SERVICE ROLE CREDIT TEST:", {
-      data,
-      error,
-      count,
-    });
-
-    return res.json({
-      success: !error,
-      keyInfo,
-      data,
-      count,
-      error,
-    });
-  } catch (err) {
-    console.error("❌ SERVICE ROLE TEST ERROR:", err);
-
-    return res.status(500).json({
-      success: false,
-      error: err.message,
-    });
-  }
-});
-
-app.get("/debug/backend-identity", async (req, res) => {
-  try {
-    const { data, error } = await supabase.rpc("debug_backend_identity");
-
-    console.log("🔐 BACKEND IDENTITY:", {
-      data,
-      error,
-    });
-
-    return res.json({
-      success: !error,
-      data,
-      error,
-    });
-  } catch (err) {
-    console.error("❌ BACKEND IDENTITY ERROR:", err);
-
-    return res.status(500).json({
-      success: false,
-      error: err.message,
-    });
-  }
-});
-
-// ✅ Health check
 app.get("/", (_req, res) => {
   res.send("Operator API running");
 });
 
-// Add middleware to check admin role
-const requireAdmin = async (req, res, next) => {
-  const managerId = req.headers["x-manager-id"];
-  if (!managerId) return res.status(401).json({ error: "Unauthorized" });
-
-  const { data: manager } = await supabase
-    .from("managers")
-    .select("role")
-    .eq("id", managerId)
-    .single();
-
-  if (!manager || manager.role !== "admin") {
-    return res.status(403).json({ error: "Admin access required" });
-  }
-
-  next();
-};
-
 // ==========================
-// USER ROUTES
+// AUTH GUARDS (must be registered before the routes below)
 // ==========================
-app.post("/user/send-message", async (req, res) => {
-  try {
-    const { conversation_id, user_id, content, image_url } = req.body;
+// Operator / stopped / poker routes: signed operator token required
+// (operator_id is taken from the token, see src/auth.js).
+const operatorGuard = (req, res, next) =>
+  req.path === "/login" ? next() : requireOperator(req, res, next);
+app.use("/operator", operatorGuard);
+app.use("/stopped", requireOperator);
+app.use("/poker", requireOperator);
 
-    console.log("📨 Received user message:", {
-      user_id,
-      conversation_id,
-      content: content?.substring(0, 50),
-      contentLength: content?.length,
-    });
+// Manager app routes: verified Supabase session + active managers row
+app.use("/manager", requireManager);
 
-    // ✅ STEP 1: ALWAYS mask user messages FIRST
-    const { maskedContent, wasMasked, detectionType } = await maskUserMessage(
-      supabase,
-      conversation_id,
-      user_id,
-      content,
-    );
+// Site admin routes (city management, user list)
+app.use("/admin", requireSiteAdmin);
 
-    console.log("🔒 Masking result:", {
-      wasMasked,
-      detectionType,
-      maskedContent: maskedContent?.substring(0, 50),
-    });
-
-    // Helper function to mark conversation as read
-    const markConversationAsRead = async (convId, userId) => {
-      await supabase.from("conversation_reads").upsert({
-        conversation_id: convId,
-        user_id: userId,
-        last_read_at: new Date().toISOString(),
-      });
-    };
-
-    // Check for existing assignment
-    const { data: existingAssignment, error: assignError } = await supabase
-      .from("message_queue")
-      .select("id, assigned_operator_id, status, expires_at")
-      .eq("conversation_id", conversation_id)
-      .eq("status", "assigned")
-      .gte("expires_at", new Date().toISOString())
-      .maybeSingle();
-
-    if (assignError) {
-      console.error("❌ Assignment check error:", assignError);
-    }
-
-    let assignedOperatorId = null;
-
-    // ✅ Insert the masked message
-    const { data: message, error: msgError } = await supabase
-      .from("messages")
-      .insert({
-        conversation_id,
-        sender_type: "real_user",
-        sender_user_id: user_id,
-        content: maskedContent, // ✅ ALWAYS MASKED
-        image_url,
-        direction: "user_to_fictional",
-        credit_cost: 1,
-        is_read: false,
-        was_masked: wasMasked,
-      })
-      .select()
-      .single();
-
-    // ✅ Check for errors properly
-    if (msgError) {
-      console.error("❌ Message insert error:", msgError);
-      throw new Error(msgError.message);
-    }
-
-    console.log("✅ Message inserted:", message.id, "was_masked:", wasMasked);
-
-    // Update conversation last message
-    await supabase
-      .from("conversations")
-      .update({
-        last_message_at: message.created_at,
-        last_message_sender_id: user_id,
-        last_message_preview: content?.substring(0, 50) || "📷 Sent a photo",
-      })
-      .eq("id", conversation_id);
-
-    // Mark conversation as read for the user
-    await markConversationAsRead(conversation_id, user_id);
-
-    if (existingAssignment) {
-      // Refresh the expires_at
-      const newExpiresAt = new Date();
-      newExpiresAt.setMinutes(newExpiresAt.getMinutes() + 5);
-
-      await supabase
-        .from("message_queue")
-        .update({ expires_at: newExpiresAt.toISOString() })
-        .eq("id", existingAssignment.id);
-
-      await supabase
-        .from("conversations")
-        .update({ stopped_attempts: 0 })
-        .eq("id", conversation_id);
-
-      return res.json({
-        success: true,
-        message,
-        assigned_operator_id: existingAssignment.assigned_operator_id,
-        is_new_assignment: false,
-        was_masked: wasMasked,
-      });
-    }
-
-    // Remove from stopped queue
-    await supabase
-      .from("stopped_queue")
-      .update({
-        status: "cancelled",
-        assigned_operator_id: null,
-        assigned_at: null,
-        expires_at: null,
-      })
-      .eq("conversation_id", conversation_id)
-      .in("status", ["pending", "assigned"]);
-
-    // Reset stopped attempts
-    await supabase
-      .from("conversations")
-      .update({ stopped_attempts: 0 })
-      .eq("id", conversation_id);
-
-    // Check for active queue
-    const { data: activeQueue } = await supabase
-      .from("message_queue")
-      .select("*")
-      .eq("conversation_id", conversation_id)
-      .in("status", ["pending", "assigned"])
-      .maybeSingle();
-
-    if (activeQueue) {
-      await supabase
-        .from("message_queue")
-        .update({
-          message_id: message.id,
-          message_count: (activeQueue.message_count || 1) + 1,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", activeQueue.id);
-
-      return res.json({
-        success: true,
-        message,
-        assigned_operator_id: activeQueue.assigned_operator_id || null,
-        is_new_assignment: false,
-        was_masked: wasMasked,
-      });
-    }
-
-    // Create new queue item
-    await supabase.from("message_queue").insert({
-      conversation_id,
-      message_id: message.id,
-      status: "pending",
-      conversation_assigned: false,
-      message_count: 1,
-      created_at: new Date().toISOString(),
-    });
-
-    return res.json({
-      success: true,
-      message,
-      assigned_operator_id: null,
-      is_new_assignment: true,
-      was_masked: wasMasked,
-    });
-  } catch (err) {
-    console.error("❌ Send message error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
+const managerOrAdmin = requireRole("admin", "manager");
+const adminOnly = requireRole("admin");
 
 // ============================================================
 // ADMIN USERS ENDPOINT
@@ -514,7 +290,17 @@ app.get("/admin/users", async (req, res) => {
   }
 });
 
-app.get("/shuffle-profiles", async (req, res) => {
+// Requires either an admin manager session or the CRON_SECRET header.
+const requireShuffleAccess = async (req, res, next) => {
+  const cronSecret = process.env.CRON_SECRET;
+  const provided = req.headers["x-cron-secret"];
+  if (cronSecret && cronSecret.length >= 16 && provided === cronSecret) {
+    return next();
+  }
+  return requireManager(req, res, () => adminOnly(req, res, next));
+};
+
+app.get("/shuffle-profiles", requireShuffleAccess, async (req, res) => {
   try {
     console.log("🔀 Starting weighted profile shuffle...");
 
@@ -796,12 +582,20 @@ app.post("/operator/next-conversation", async (req, res) => {
 app.get("/operator/conversations/:id/messages", async (req, res) => {
   try {
     const { id } = req.params;
+    const { since } = req.query;
 
-    const { data, error } = await supabase
+    let query = supabase
       .from("messages")
       .select("*")
       .eq("conversation_id", id)
       .order("created_at");
+
+    // Polling: only messages at/after the last one the operator already has
+    if (since && !Number.isNaN(Date.parse(since))) {
+      query = query.gte("created_at", new Date(since).toISOString());
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       console.error("Operator messages fetch error:", error);
@@ -907,7 +701,7 @@ app.get("/stopped/next-conversation", async (req, res) => {
   }
 });
 
-app.post("/operator/login", async (req, res) => {
+app.post("/operator/login", loginLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
 
@@ -917,7 +711,9 @@ app.post("/operator/login", async (req, res) => {
 
     const { data: operator, error } = await supabase
       .from("operator_accounts")
-      .select("*")
+      .select(
+        "id, username, role, operator_type, full_name, email, is_active, password_hash",
+      )
       .eq("username", username)
       .single();
 
@@ -947,10 +743,19 @@ app.post("/operator/login", async (req, res) => {
       .update({ last_login: new Date().toISOString() })
       .eq("id", operator.id);
 
-    const { password_hash, ...safeOperator } = operator;
+    let token;
+    try {
+      token = signOperatorToken(operator);
+    } catch (e) {
+      console.error("Operator token error:", e.message);
+      return res
+        .status(500)
+        .json({ error: "Login temporarily unavailable. Contact support." });
+    }
 
     // ✅ Include operator_type in the response
     res.json({
+      token,
       id: operator.id,
       username: operator.username,
       role: operator.role,
@@ -962,6 +767,12 @@ app.post("/operator/login", async (req, res) => {
     console.error("Operator login error:", err);
     res.status(500).json({ error: err.message });
   }
+});
+
+// Current operator (from the verified token)
+app.get("/operator/me", (req, res) => {
+  const { id, username, role, operator_type } = req.operator;
+  res.json({ id, username, role, operator_type });
 });
 
 // ==========================
@@ -2162,12 +1973,16 @@ app.get("/operator/private-photos/:fictionalId", async (req, res) => {
     if (error) throw error;
 
     // Check which photos were already sent to this conversation
-    const { data: sentPhotos, error: sentError } = await supabase
-      .from("photo_sent_log")
-      .select("photo_id")
-      .eq("conversation_id", conversation_id);
+    let sentPhotos = [];
+    if (conversation_id) {
+      const { data, error: sentError } = await supabase
+        .from("photo_sent_log")
+        .select("photo_id")
+        .eq("conversation_id", conversation_id);
 
-    if (sentError) throw sentError;
+      if (sentError) throw sentError;
+      sentPhotos = data || [];
+    }
 
     const sentPhotoIds = new Set(sentPhotos?.map((p) => p.photo_id) || []);
 
@@ -4105,26 +3920,175 @@ app.get("/manager/conversations", async (req, res) => {
 //   }
 // });
 
-app.get("/manager/operators", async (req, res) => {
+// ==========================
+// POKER: own flirt history (for dashboard stats)
+// ==========================
+app.get("/poker/flirt-messages", async (req, res) => {
   try {
-    const {
-      page = 1,
-      limit = 20,
-      search = "",
-      operator_type = "all",
-    } = req.query;
+    // Enough history for "today", "this month" and "last month"
+    const since = new Date();
+    since.setDate(since.getDate() - 70);
 
-    const from = (parseInt(page) - 1) * parseInt(limit);
-    const to = from + parseInt(limit) - 1;
+    const { data, error } = await supabase
+      .from("messages")
+      .select("id, created_at")
+      .eq("operator_id", req.operator.id)
+      .eq("is_flirt", true)
+      .gte("created_at", since.toISOString());
+
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    console.error("Flirt stats error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================
+// MANAGER: security alerts (was read directly from Supabase by the app)
+// ==========================
+app.get("/manager/security-alerts", adminOnly, async (req, res) => {
+  try {
+    const [flagged, violations] = await Promise.all([
+      supabase
+        .from("flagged_messages")
+        .select(
+          `
+          *,
+          conversations!inner (
+            user_profiles!inner (
+              display_name,
+              email
+            ),
+            fictional_profiles!inner (
+              display_name
+            )
+          )
+        `,
+        )
+        .eq("reviewed", false)
+        .order("detected_at", { ascending: false })
+        .limit(50),
+      supabase
+        .from("operator_violations")
+        .select(
+          `
+          *,
+          operator_accounts!inner (
+            username,
+            full_name,
+            email
+          )
+        `,
+        )
+        .eq("resolved", false)
+        .order("detected_at", { ascending: false })
+        .limit(50),
+    ]);
+
+    if (flagged.error) throw flagged.error;
+    if (violations.error) throw violations.error;
+
+    res.json({ flagged: flagged.data || [], violations: violations.data || [] });
+  } catch (err) {
+    console.error("Security alerts error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/manager/security-alerts/:type/:id/review", adminOnly, async (req, res) => {
+  try {
+    const { type, id } = req.params;
+    const table =
+      type === "flagged"
+        ? "flagged_messages"
+        : type === "violation"
+          ? "operator_violations"
+          : null;
+    if (!table) return res.status(400).json({ error: "Invalid type" });
+
+    // Same fields the manager app used to write directly
+    const { error } = await supabase
+      .from(table)
+      .update({ reviewed: true, reviewed_at: new Date().toISOString() })
+      .eq("id", id);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Review alert error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================
+// MANAGER: user blocks (list + unblock)
+// ==========================
+app.get("/manager/blocked-users", adminOnly, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("blocked_profiles")
+      .select(
+        `
+        id,
+        blocked_at,
+        user_profiles!user_profile_id (
+          id,
+          display_name,
+          email,
+          country
+        ),
+        fictional_profiles!blocked_fictional_id (
+          id,
+          display_name,
+          country,
+          image_url
+        )
+      `,
+      )
+      .order("blocked_at", { ascending: false });
+
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) {
+    console.error("Blocked users error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/manager/blocked-users/:id", adminOnly, async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from("blocked_profiles")
+      .delete()
+      .eq("id", req.params.id);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Unblock error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/manager/operators", managerOrAdmin, async (req, res) => {
+  try {
+    const { search = "", operator_type = "all" } = req.query;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
 
     let query = supabase
       .from("operator_accounts")
-      .select("*", { count: "exact" });
+      .select(OPERATOR_SAFE_COLUMNS, { count: "exact" });
 
-    // Apply search filter
-    if (search && search.trim() !== "") {
+    // Apply search filter (escaped - see orFilterLike)
+    const term = orFilterLike(search);
+    if (term) {
       query = query.or(
-        `username.ilike.%${search}%,email.ilike.%${search}%,full_name.ilike.%${search}%`,
+        `username.ilike.${term},email.ilike.${term},full_name.ilike.${term}`,
       );
     }
 
@@ -4144,8 +4108,8 @@ app.get("/manager/operators", async (req, res) => {
     res.json({
       operators: operators || [],
       total: count || 0,
-      page: parseInt(page),
-      totalPages: Math.ceil((count || 0) / parseInt(limit)),
+      page,
+      totalPages: Math.ceil((count || 0) / limit),
     });
   } catch (err) {
     console.error("Operators error:", err);
@@ -4154,10 +4118,16 @@ app.get("/manager/operators", async (req, res) => {
 });
 
 // Create a new operator (from Manager App)
-app.post("/manager/operators", async (req, res) => {
+app.post("/manager/operators", managerOrAdmin, async (req, res) => {
   try {
     const { username, email, full_name, password, operator_type, role } =
       req.body;
+
+    if (!username || !password || String(password).length < 8) {
+      return res.status(400).json({
+        error: "Username and a password of at least 8 characters are required",
+      });
+    }
 
     console.log("➕ Creating operator:", {
       username,
@@ -4183,7 +4153,7 @@ app.post("/manager/operators", async (req, res) => {
         is_active: true,
         created_at: new Date().toISOString(),
       })
-      .select()
+      .select(OPERATOR_SAFE_COLUMNS)
       .single();
 
     if (error) {
@@ -4191,8 +4161,7 @@ app.post("/manager/operators", async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
 
-    const { password_hash, ...safeOperator } = operator;
-    res.json({ success: true, operator: safeOperator });
+    res.json({ success: true, operator });
   } catch (err) {
     console.error("Create operator error:", err);
     res.status(500).json({ error: err.message });
@@ -4201,7 +4170,7 @@ app.post("/manager/operators", async (req, res) => {
 
 // Get blocked profiles (simplified)
 // Get blocked profiles (fixed - same pattern as conversations)
-app.get("/manager/blocked-profiles", async (req, res) => {
+app.get("/manager/blocked-profiles", adminOnly, async (req, res) => {
   try {
     const { country = "all", page = 1, limit = 20 } = req.query;
 
@@ -4289,7 +4258,7 @@ app.get("/manager/blocked-profiles", async (req, res) => {
   }
 });
 
-app.get("/manager/reports", async (req, res) => {
+app.get("/manager/reports", adminOnly, async (req, res) => {
   try {
     const { status = "all", page = 1, limit = 20 } = req.query;
 
@@ -4426,7 +4395,7 @@ app.get("/manager/reports", async (req, res) => {
 });
 
 // Update report status
-app.put("/manager/reports/:id/status", async (req, res) => {
+app.put("/manager/reports/:id/status", adminOnly, async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -4453,43 +4422,8 @@ app.put("/manager/reports/:id/status", async (req, res) => {
   }
 });
 
-// Create operator
-app.get("/manager/operators", requireAdmin, async (req, res) => {
-  try {
-    const { page = 1, limit = 20 } = req.query;
-
-    const from = (parseInt(page) - 1) * parseInt(limit);
-    const to = from + parseInt(limit) - 1;
-
-    const {
-      data: operators,
-      error,
-      count,
-    } = await supabase
-      .from("operator_accounts")
-      .select("*", { count: "exact" })
-      .order("created_at", { ascending: false })
-      .range(from, to);
-
-    if (error) throw error;
-
-    // Don't send password_hash to frontend
-    const safeOperators = operators?.map(({ password_hash, ...rest }) => rest);
-
-    res.json({
-      operators: safeOperators || [],
-      total: count || 0,
-      page: parseInt(page),
-      totalPages: Math.ceil((count || 0) / parseInt(limit)),
-    });
-  } catch (err) {
-    console.error("Operators error:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 // Update operator
-app.put("/manager/operators/:id", requireAdmin, async (req, res) => {
+app.put("/manager/operators/:id", managerOrAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { username, full_name, email, role, password } = req.body;
@@ -4497,6 +4431,11 @@ app.put("/manager/operators/:id", requireAdmin, async (req, res) => {
     const updateData = { username, full_name, email, role };
 
     if (password) {
+      if (String(password).length < 8) {
+        return res
+          .status(400)
+          .json({ error: "Password must be at least 8 characters" });
+      }
       const saltRounds = 10;
       updateData.password_hash = await bcrypt.hash(password, saltRounds);
     }
@@ -4505,13 +4444,12 @@ app.put("/manager/operators/:id", requireAdmin, async (req, res) => {
       .from("operator_accounts")
       .update(updateData)
       .eq("id", id)
-      .select()
+      .select(OPERATOR_SAFE_COLUMNS)
       .single();
 
     if (error) throw error;
 
-    const { password_hash, ...safeOperator } = data;
-    res.json({ success: true, operator: safeOperator });
+    res.json({ success: true, operator: data });
   } catch (err) {
     console.error("Update operator error:", err);
     res.status(500).json({ error: err.message });
@@ -4519,7 +4457,7 @@ app.put("/manager/operators/:id", requireAdmin, async (req, res) => {
 });
 
 // Delete operator
-app.delete("/manager/operators/:id", requireAdmin, async (req, res) => {
+app.delete("/manager/operators/:id", managerOrAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -4540,7 +4478,7 @@ app.delete("/manager/operators/:id", requireAdmin, async (req, res) => {
 // Toggle block operator
 app.post(
   "/manager/operators/:id/toggle-block",
-  requireAdmin,
+  managerOrAdmin,
   async (req, res) => {
     try {
       const { id } = req.params;
@@ -4648,68 +4586,34 @@ app.get("/manager/operator-stats", async (req, res) => {
 });
 
 // Manager login
-app.post("/manager/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    console.log("🔐 Manager login:", email);
-
-    const { data: authData, error: authError } =
-      await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-    if (authError) {
-      console.log("Auth error:", authError.message);
-      return res.status(401).json({ error: "Invalid credentials" });
-    }
-
-    const { data: manager, error: managerError } = await supabase
-      .from("managers")
-      .select("*")
-      .eq("user_id", authData.user.id)
-      .single();
-
-    if (managerError || !manager) {
-      console.log("Not a manager");
-      await supabase.auth.signOut();
-      return res.status(401).json({ error: "Not authorized as manager" });
-    }
-
-    if (!manager.is_active) {
-      await supabase.auth.signOut();
-      return res.status(401).json({ error: "Account disabled" });
-    }
-
-    res.json({
-      id: manager.id,
-      username: manager.username,
-      full_name: manager.full_name,
-      email: manager.email,
-      role: manager.role,
-    });
-  } catch (err) {
-    console.error("Login error:", err);
-    res.status(500).json({ error: err.message });
-  }
+// The manager app signs in with Supabase Auth directly; this endpoint only
+// confirms the bearer token belongs to an active manager (checked by the
+// /manager guard) and returns the profile. No passwords pass through here.
+app.post("/manager/login", (req, res) => {
+  const { id, username, full_name, email, role } = req.manager;
+  res.json({ id, username, full_name, email, role });
 });
 
 // Get managers list with search
-app.get("/manager/managers", async (req, res) => {
+app.get("/manager/managers", adminOnly, async (req, res) => {
   try {
-    const { page = 1, limit = 20, search = "" } = req.query;
+    const { search = "" } = req.query;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
 
-    const from = (parseInt(page) - 1) * parseInt(limit);
-    const to = from + parseInt(limit) - 1;
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
 
-    // ✅ Define query first
-    let query = supabase.from("managers").select("*", { count: "exact" });
+    // ✅ Define query first (never select password columns)
+    let query = supabase
+      .from("managers")
+      .select(MANAGER_SAFE_COLUMNS, { count: "exact" });
 
-    // ✅ Apply search filter if search term exists
-    if (search && search.trim() !== "") {
+    // ✅ Apply escaped search filter if search term exists
+    const term = orFilterLike(search);
+    if (term) {
       query = query.or(
-        `username.ilike.%${search}%,email.ilike.%${search}%,full_name.ilike.%${search}%`,
+        `username.ilike.${term},email.ilike.${term},full_name.ilike.${term}`,
       );
     }
 
@@ -4724,8 +4628,8 @@ app.get("/manager/managers", async (req, res) => {
     res.json({
       managers: managers || [],
       total: count || 0,
-      page: parseInt(page),
-      totalPages: Math.ceil((count || 0) / parseInt(limit)),
+      page,
+      totalPages: Math.ceil((count || 0) / limit),
     });
   } catch (err) {
     console.error("Managers error:", err);
@@ -4734,7 +4638,7 @@ app.get("/manager/managers", async (req, res) => {
 });
 
 // Create a new manager (using Supabase Auth)
-app.post("/manager/managers", async (req, res) => {
+app.post("/manager/managers", adminOnly, async (req, res) => {
   try {
     const { username, email, full_name, password, role } = req.body;
 
@@ -4745,6 +4649,14 @@ app.post("/manager/managers", async (req, res) => {
       return res
         .status(400)
         .json({ error: "Username, email, and password are required" });
+    }
+    if (String(password).length < 8) {
+      return res
+        .status(400)
+        .json({ error: "Password must be at least 8 characters" });
+    }
+    if (role && !MANAGER_ROLES.includes(role)) {
+      return res.status(400).json({ error: "Invalid role" });
     }
 
     // Check if username already exists in managers table
@@ -4787,7 +4699,7 @@ app.post("/manager/managers", async (req, res) => {
         is_active: true,
         created_at: new Date().toISOString(),
       })
-      .select()
+      .select(MANAGER_SAFE_COLUMNS)
       .single();
 
     if (error) {
@@ -4805,29 +4717,61 @@ app.post("/manager/managers", async (req, res) => {
 });
 
 // Update manager
-app.put("/manager/managers/:id", async (req, res) => {
+app.put("/manager/managers/:id", adminOnly, async (req, res) => {
   try {
     const { id } = req.params;
     const { username, full_name, email, role, password } = req.body;
 
-    const updateData = { username, full_name, email, role };
-
-    if (password) {
-      const saltRounds = 10;
-      updateData.password_hash = await bcrypt.hash(password, saltRounds);
+    if (role && !MANAGER_ROLES.includes(role)) {
+      return res.status(400).json({ error: "Invalid role" });
     }
+    if (id === req.manager.id && role && role !== "admin") {
+      return res
+        .status(400)
+        .json({ error: "You cannot remove your own admin role" });
+    }
+    if (password && String(password).length < 8) {
+      return res
+        .status(400)
+        .json({ error: "Password must be at least 8 characters" });
+    }
+
+    const { data: target, error: targetError } = await supabase
+      .from("managers")
+      .select("user_id")
+      .eq("id", id)
+      .single();
+
+    if (targetError || !target) {
+      return res.status(404).json({ error: "Manager not found" });
+    }
+
+    // Managers log in with Supabase Auth: password/email live there
+    if (target.user_id && (password || email)) {
+      const authUpdate = {};
+      if (password) authUpdate.password = password;
+      if (email) authUpdate.email = email;
+      const { error: authError } = await supabase.auth.admin.updateUserById(
+        target.user_id,
+        authUpdate,
+      );
+      if (authError) {
+        return res.status(400).json({ error: authError.message });
+      }
+    }
+
+    const updateData = { username, full_name, email, role };
 
     const { data, error } = await supabase
       .from("managers")
       .update(updateData)
       .eq("id", id)
-      .select()
+      .select(MANAGER_SAFE_COLUMNS)
       .single();
 
     if (error) throw error;
 
-    const { password_hash, ...safeManager } = data;
-    res.json({ success: true, manager: safeManager });
+    res.json({ success: true, manager: data });
   } catch (err) {
     console.error("Update manager error:", err);
     res.status(500).json({ error: err.message });
@@ -4835,10 +4779,16 @@ app.put("/manager/managers/:id", async (req, res) => {
 });
 
 // Toggle manager active status
-app.post("/manager/managers/:id/toggle-active", async (req, res) => {
+app.post("/manager/managers/:id/toggle-active", adminOnly, async (req, res) => {
   try {
     const { id } = req.params;
     const { is_active } = req.body;
+
+    if (id === req.manager.id && !is_active) {
+      return res
+        .status(400)
+        .json({ error: "You cannot deactivate your own account" });
+    }
 
     console.log("🔒 Toggle manager active:", { id, is_active });
 
@@ -4857,7 +4807,7 @@ app.post("/manager/managers/:id/toggle-active", async (req, res) => {
 });
 
 // Toggle operator active status
-app.post("/manager/operators/:id/toggle-active", async (req, res) => {
+app.post("/manager/operators/:id/toggle-active", managerOrAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { is_active } = req.body;
@@ -4883,9 +4833,15 @@ app.post("/manager/operators/:id/toggle-active", async (req, res) => {
 });
 
 // Delete manager
-app.delete("/manager/managers/:id", async (req, res) => {
+app.delete("/manager/managers/:id", adminOnly, async (req, res) => {
   try {
     const { id } = req.params;
+
+    if (id === req.manager.id) {
+      return res
+        .status(400)
+        .json({ error: "You cannot delete your own account" });
+    }
 
     const { error } = await supabase.from("managers").delete().eq("id", id);
 
@@ -4898,7 +4854,7 @@ app.delete("/manager/managers/:id", async (req, res) => {
   }
 });
 
-app.get("/manager/messages", async (req, res) => {
+app.get("/manager/messages", managerOrAdmin, async (req, res) => {
   try {
     const {
       country = "all",
@@ -5223,7 +5179,7 @@ app.get("/manager/messages", async (req, res) => {
 // ==========================
 
 // Get queue statistics for the manager dashboard
-app.get("/manager/queue-stats", async (req, res) => {
+app.get("/manager/queue-stats", adminOnly, async (req, res) => {
   try {
     const now = new Date().toISOString();
     const staleThreshold = new Date();
@@ -5361,38 +5317,16 @@ app.get("/manager/queue-stats", async (req, res) => {
 // =============================================
 
 // ✅ Middleware to verify outreach operator
-const verifyOutreachOperator = async (req, res, next) => {
-  const operatorId =
-    req.headers["x-operator-id"] ||
-    req.body.operator_id ||
-    req.query.operator_id;
-
-  if (!operatorId) {
-    return res.status(401).json({ error: "Operator ID required" });
+const verifyOutreachOperator = (req, res, next) => {
+  // req.operator was set from the verified token by the /operator guard
+  if (!req.operator) {
+    return res.status(401).json({ error: "Not authenticated" });
   }
-
-  const { data: operator, error } = await supabase
-    .from("operator_accounts")
-    .select("operator_type, is_active")
-    .eq("id", operatorId)
-    .single();
-
-  if (error || !operator) {
-    return res.status(404).json({ error: "Operator not found" });
-  }
-
-  if (!operator.is_active) {
-    return res.status(403).json({ error: "Account deactivated" });
-  }
-
-  if (operator.operator_type !== "outreach") {
+  if (req.operator.operator_type !== "outreach") {
     return res
       .status(403)
       .json({ error: "Not authorized - Outreach operators only" });
   }
-
-  req.operator = operator;
-  req.operatorId = operatorId;
   next();
 };
 
@@ -5407,7 +5341,10 @@ app.get("/operator/search-users", verifyOutreachOperator, async (req, res) => {
       return res.json({ users: [] });
     }
 
-    const searchQuery = `%${query}%`;
+    const searchQuery = orFilterLike(query);
+    if (!searchQuery) {
+      return res.json({ users: [] });
+    }
 
     const { data: users, error } = await supabase
       .from("user_profiles")
@@ -5541,7 +5478,10 @@ app.get(
         return res.json({ profiles: [] });
       }
 
-      const searchQuery = `%${query}%`;
+      const searchQuery = orFilterLike(query);
+      if (!searchQuery) {
+        return res.json({ profiles: [] });
+      }
 
       const { data: profiles, error } = await supabase
         .from("fictional_profiles")
@@ -6274,50 +6214,8 @@ setInterval(cleanupExpiredAssignments, 60 * 1000);
 // HEARTBEAT MONITORING
 // ==========================
 
-// Endpoint for operators to send heartbeat
-app.post("/operator/heartbeat", async (req, res) => {
-  try {
-    const { operator_id, device_id, queue_id } = req.body;
-
-    if (!operator_id) {
-      return res.status(400).json({
-        error: "operator_id required",
-      });
-    }
-
-    // Update operator's last seen
-    await supabase
-      .from("operator_accounts")
-      .update({
-        last_seen_at: new Date().toISOString(),
-      })
-      .eq("id", operator_id);
-
-    // Update or create operator session
-    await supabase.from("operator_sessions").upsert(
-      {
-        operator_id: operator_id,
-        device_id: device_id || null,
-        status: "online",
-        current_queue_id: queue_id || null,
-        last_heartbeat: new Date().toISOString(),
-      },
-      {
-        onConflict: "operator_id",
-      },
-    );
-
-    res.json({
-      success: true,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err) {
-    console.error("Heartbeat error:", err);
-    res.status(500).json({
-      error: err.message,
-    });
-  }
-});
+// (Duplicate /operator/heartbeat removed - the earlier definition is the
+// one Express always used.)
 
 // Heartbeat cleanup - runs every 2 minutes to check for stale operators
 const cleanupStaleOperators = async () => {
