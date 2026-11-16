@@ -1449,7 +1449,7 @@ app.post("/operator/assign-next", async (req, res) => {
       }
 
       const expiresAt = new Date();
-      expiresAt.setMinutes(expiresAt.getMinutes() + 5);
+      expiresAt.setMinutes(expiresAt.getMinutes() + 10); // pokers get 10 minutes
 
       const { data: updated, error: updateError } = await supabase
         .from("poke_queue")
@@ -2297,285 +2297,273 @@ app.post("/operator/heartbeat", async (req, res) => {
 // 7. Small random factor
 // ============================================================
 
+// ============================================================
+// POKER MATCHING
+// New sign-ups: the poker messages from the fictional profile
+// closest to the user (same city, else nearest by real distance).
+// Likes: the poker messages from the profile the user liked.
+// ============================================================
+const normText = (v) => String(v ?? "").trim().toLowerCase();
+
+const normGender = (v) => {
+  const g = normText(v);
+  if (["female", "woman", "women", "f", "girl"].includes(g)) return "female";
+  if (["male", "man", "men", "m", "boy"].includes(g)) return "male";
+  return null;
+};
+
+const toNumber = (v) => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+// Great-circle distance in km
+function distanceKm(a, b) {
+  const R = 6371;
+  const rad = (d) => (d * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat);
+  const dLng = rad(b.lng - a.lng);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+async function fetchAllRows(table, columns) {
+  const rows = [];
+  const size = 1000;
+  for (let from = 0; ; from += size) {
+    const { data, error } = await supabase
+      .from(table)
+      .select(columns)
+      .range(from, from + size - 1);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < size) break;
+  }
+  return rows;
+}
+
+// Cities (with coordinates) and neighbouring states, cached for 10 minutes
+let pokerGeoCache = { loadedAt: 0, cities: new Map(), neighbors: new Map() };
+
+async function loadPokerGeo() {
+  if (Date.now() - pokerGeoCache.loadedAt < 10 * 60 * 1000) return pokerGeoCache;
+
+  const cities = new Map(); // city name -> [{ state, lat, lng }]
+  const neighbors = new Map(); // state name -> Set(neighbour state names)
+
+  try {
+    const stateNameById = new Map();
+    for (const s of await fetchAllRows("states", "id, state_name")) {
+      stateNameById.set(s.id, normText(s.state_name));
+    }
+
+    for (const c of await fetchAllRows(
+      "cities",
+      "city_name, state_id, latitude, longitude",
+    )) {
+      const lat = toNumber(c.latitude);
+      const lng = toNumber(c.longitude);
+      if (lat === null || lng === null) continue;
+      const key = normText(c.city_name);
+      if (!cities.has(key)) cities.set(key, []);
+      cities.get(key).push({ state: stateNameById.get(c.state_id) || "", lat, lng });
+    }
+
+    for (const r of await fetchAllRows(
+      "state_neighbors",
+      "state_id, neighbor_state_id",
+    )) {
+      const a = stateNameById.get(r.state_id);
+      const b = stateNameById.get(r.neighbor_state_id);
+      if (!a || !b) continue;
+      for (const [x, y] of [
+        [a, b],
+        [b, a],
+      ]) {
+        if (!neighbors.has(x)) neighbors.set(x, new Set());
+        neighbors.get(x).add(y);
+      }
+    }
+  } catch (err) {
+    console.error("Poker geo data load failed:", err.message);
+  }
+
+  pokerGeoCache = { loadedAt: Date.now(), cities, neighbors };
+  return pokerGeoCache;
+}
+
+// Coordinates from the profile itself, else from its city in the cities table
+function coordsFor(entity, geo) {
+  const lat = toNumber(entity.location_latitude);
+  const lng = toNumber(entity.location_longitude);
+  if (lat !== null && lng !== null && !(lat === 0 && lng === 0)) {
+    return { lat, lng };
+  }
+  const options = geo.cities.get(normText(entity.city));
+  if (!options?.length) return null;
+  const state = normText(entity.state);
+  const hit =
+    (state && options.find((o) => o.state === state)) ||
+    (options.length === 1 ? options[0] : null);
+  return hit ? { lat: hit.lat, lng: hit.lng } : null;
+}
+
 async function getSuggestedFictionalProfiles(user) {
   try {
-    const userCountry = user.user_country?.trim().toLowerCase();
-    const userState = user.user_state?.trim().toLowerCase();
-    const userCity = user.user_city?.trim().toLowerCase();
-    const userAge = Number(user.user_age) || null;
+    // Fresh details from the user's profile (the queue copy can be
+    // incomplete, e.g. it often has no state).
+    let profile = null;
+    if (user.user_profile_id) {
+      const { data } = await supabase
+        .from("user_profiles")
+        .select("*")
+        .eq("id", user.user_profile_id)
+        .maybeSingle();
+      profile = data || null;
+    }
 
-    const userInterests = Array.isArray(user.user_interests)
-      ? user.user_interests.map((i) => String(i).trim().toLowerCase())
-      : [];
+    const me = {
+      city: profile?.city ?? user.user_city,
+      state: profile?.state ?? user.user_state,
+      country: profile?.country ?? user.user_country,
+      age: toNumber(profile?.age ?? user.user_age),
+      interests: (Array.isArray(profile?.interests)
+        ? profile.interests
+        : Array.isArray(user.user_interests)
+          ? user.user_interests
+          : []
+      ).map(normText),
+      lookingFor: normGender(profile?.looking_gender),
+      location_latitude: profile?.location_latitude,
+      location_longitude: profile?.location_longitude,
+    };
 
-    console.log("🎯 Poker matching user:");
-    console.log({
-      country: userCountry,
-      state: userState,
-      city: userCity,
-      age: userAge,
-      interests: userInterests,
-    });
+    const geo = await loadPokerGeo();
+    const myCoords = coordsFor(me, geo);
+    const myCity = normText(me.city);
+    const myState = normText(me.state);
 
-    // --------------------------------------------------------
-    // STEP 1: Get active fictional profiles
-    // --------------------------------------------------------
-
+    // Active fictional profiles in the user's country
     let query = supabase
       .from("fictional_profiles")
       .select("*")
       .eq("is_deleted", false);
-
-    // Country is our first database-level filter.
-    // We don't want to compare a California user with
-    // profiles from another country.
-    if (userCountry) {
-      query = query.ilike("country", userCountry);
-    }
+    if (me.country) query = query.ilike("country", String(me.country).trim());
 
     const { data, error } = await query;
-
     if (error) throw error;
+    let candidates = data || [];
 
-    if (!data?.length) {
-      console.log("⚠️ No fictional profiles found.");
-      return [];
+    // Never suggest a profile the user blocked or already chats with
+    if (user.user_profile_id && candidates.length) {
+      const [blocks, convs] = await Promise.all([
+        supabase
+          .from("blocked_profiles")
+          .select("blocked_fictional_id")
+          .eq("user_profile_id", user.user_profile_id),
+        supabase
+          .from("conversations")
+          .select("fictional_profile_id")
+          .eq("user_id", user.user_profile_id),
+      ]);
+      const exclude = new Set([
+        ...(blocks.data || []).map((b) => b.blocked_fictional_id),
+        ...(convs.data || []).map((c) => c.fictional_profile_id),
+      ]);
+      candidates = candidates.filter((p) => !exclude.has(p.id));
     }
 
-    console.log(
-      `📊 Found ${data.length} active fictional profiles in ${userCountry || "all countries"}`,
-    );
+    // Respect who the user is looking for (never empties the list)
+    if (me.lookingFor) {
+      const matching = candidates.filter((p) => {
+        const g = normGender(p.gender);
+        return !g || g === me.lookingFor;
+      });
+      if (matching.length) candidates = matching;
+    }
 
-    // --------------------------------------------------------
-    // STEP 2: Score every profile
-    // --------------------------------------------------------
+    const neighborStates = geo.neighbors.get(myState) || new Set();
 
-    const scoredProfiles = data.map((profile) => {
-      let score = 0;
-      const matchReasons = [];
+    const scored = candidates.map((p) => {
+      const pCity = normText(p.city);
+      const pState = normText(p.state);
+      const sameState = !!(myState && pState && myState === pState);
+      const sameCity = !!(
+        myCity &&
+        pCity &&
+        myCity === pCity &&
+        (!myState || !pState || sameState)
+      );
 
-      const profileCountry = profile.country?.trim().toLowerCase() || "";
+      const pCoords = coordsFor(p, geo);
+      const km = myCoords && pCoords ? distanceKm(myCoords, pCoords) : null;
 
-      const profileState = profile.state?.trim().toLowerCase() || "";
-
-      const profileCity = profile.city?.trim().toLowerCase() || "";
-
-      // ======================================================
-      // GEOGRAPHY
-      // ======================================================
-
-      const sameCountry =
-        userCountry && profileCountry && userCountry === profileCountry;
-
-      const sameState = userState && profileState && userState === profileState;
-
-      const sameCity = userCity && profileCity && userCity === profileCity;
-
-      // ------------------------------------------------------
-      // SAME CITY + SAME STATE
-      // VERY IMPORTANT
-      // ------------------------------------------------------
-
-      if (sameCity && sameState) {
-        score += 100;
-        matchReasons.push("Same city");
+      // Distance decides the order. Without coordinates, estimate it
+      // from the region so a nearby state still beats a far one.
+      let effectiveKm;
+      let label;
+      if (sameCity) {
+        effectiveKm = 0;
+        label = "Same city";
+      } else if (km !== null) {
+        effectiveKm = km;
+        label = `${Math.round(km)} km away`;
+      } else if (sameState) {
+        effectiveKm = 150;
+        label = "Same state";
+      } else if (pState && neighborStates.has(pState)) {
+        effectiveKm = 400;
+        label = "Neighbouring state";
+      } else {
+        effectiveKm = 1500;
+        label = "Same country";
       }
 
-      // ------------------------------------------------------
-      // SAME STATE
-      // ------------------------------------------------------
-      else if (sameState) {
-        score += 60;
-        matchReasons.push("Same state");
-      }
-
-      // ------------------------------------------------------
-      // SAME COUNTRY
-      // ------------------------------------------------------
-      else if (sameCountry) {
-        score += 20;
-        matchReasons.push("Same country");
-      }
-
-      // ======================================================
-      // INTERESTS
-      // ======================================================
-
-      if (
-        userInterests.length > 0 &&
-        Array.isArray(profile.interests) &&
-        profile.interests.length > 0
-      ) {
-        const profileInterests = profile.interests.map((i) =>
-          String(i).trim().toLowerCase(),
-        );
-
-        const matchedInterests = userInterests.filter((interest) =>
-          profileInterests.includes(interest),
-        );
-
-        if (matchedInterests.length > 0) {
-          const interestScore = Math.min(matchedInterests.length * 10, 30);
-
-          score += interestScore;
-
-          matchReasons.push(
-            `${matchedInterests.length} matching interest${
-              matchedInterests.length > 1 ? "s" : ""
-            }`,
-          );
+      // Age and interests only break ties between equally close profiles
+      const reasons = [label];
+      let bonus = 0;
+      const pAge = toNumber(p.age);
+      if (me.age && pAge) {
+        const diff = Math.abs(pAge - me.age);
+        if (diff <= 2) {
+          bonus += 3;
+          reasons.push("Very similar age");
+        } else if (diff <= 5) {
+          bonus += 2;
+          reasons.push("Similar age");
+        } else if (diff <= 10) {
+          bonus += 1;
         }
       }
-
-      // ======================================================
-      // AGE
-      // ======================================================
-
-      if (userAge && profile.age) {
-        const ageDifference = Math.abs(Number(profile.age) - userAge);
-
-        if (ageDifference <= 2) {
-          score += 25;
-          matchReasons.push("Very similar age");
-        } else if (ageDifference <= 5) {
-          score += 15;
-          matchReasons.push("Similar age");
-        } else if (ageDifference <= 10) {
-          score += 5;
+      if (me.interests.length && Array.isArray(p.interests)) {
+        const pInterests = p.interests.map(normText);
+        const shared = me.interests.filter((i) => pInterests.includes(i)).length;
+        if (shared) {
+          bonus += Math.min(shared, 3);
+          reasons.push(`${shared} shared interest${shared > 1 ? "s" : ""}`);
         }
       }
-
-      // ======================================================
-      // PROFILE QUALITY
-      // ======================================================
-
-      if (profile.image_url) {
-        score += 5;
-      }
-
-      if (profile.bio && profile.bio.length > 20) {
-        score += 3;
-      }
-
-      // ======================================================
-      // SMALL RANDOM FACTOR
-      //
-      // This prevents exactly the same profiles from always
-      // appearing in exactly the same order.
-      // ======================================================
-
-      score += Math.random() * 5;
+      if (p.image_url) bonus += 0.5;
+      bonus += Math.random(); // vary the order among equally good matches
 
       return {
-        ...profile,
-        score,
-        matchReasons: matchReasons.slice(0, 4),
-
-        // Keep these internally so we can make the fallback
-        // logic more intelligent.
-        _sameCity: sameCity && sameState,
-        _sameState: sameState,
-        _sameCountry: sameCountry,
+        ...p,
+        distanceKm: km === null ? null : Math.round(km),
+        distanceLabel: label,
+        matchReasons: reasons,
+        _band: effectiveKm === 0 ? 0 : Math.ceil(effectiveKm / 5), // 5 km bands
+        _bonus: bonus,
       };
     });
 
-    // --------------------------------------------------------
-    // STEP 3: Sort by TOTAL MATCH SCORE
-    // --------------------------------------------------------
+    scored.sort((a, b) => a._band - b._band || b._bonus - a._bonus);
 
-    scoredProfiles.sort((a, b) => b.score - a.score);
-
-    // --------------------------------------------------------
-    // STEP 4: Geography-aware candidate selection
-    //
-    // We don't want the random factor to accidentally push
-    // all local profiles out.
-    // --------------------------------------------------------
-
-    const sameCityProfiles = scoredProfiles.filter((p) => p._sameCity);
-
-    const sameStateProfiles = scoredProfiles.filter(
-      (p) => p._sameState && !p._sameCity,
-    );
-
-    const sameCountryProfiles = scoredProfiles.filter(
-      (p) => p._sameCountry && !p._sameState,
-    );
-
-    console.log("📍 Poker geographic candidates:");
-    console.log({
-      sameCity: sameCityProfiles.length,
-      sameState: sameStateProfiles.length,
-      sameCountry: sameCountryProfiles.length,
-    });
-
-    // --------------------------------------------------------
-    // STEP 5: Build the final 10
-    //
-    // City profiles first.
-    // Then state profiles.
-    // Then country profiles if necessary.
-    // --------------------------------------------------------
-
-    const selected = [];
-    const selectedIds = new Set();
-
-    const addProfiles = (profiles, maxCount = 10) => {
-      for (const profile of profiles) {
-        if (selected.length >= maxCount) break;
-
-        if (!selectedIds.has(profile.id)) {
-          selected.push(profile);
-          selectedIds.add(profile.id);
-        }
-      }
-    };
-
-    // SAME CITY FIRST
-    addProfiles(sameCityProfiles);
-
-    // SAME STATE SECOND
-    addProfiles(sameStateProfiles);
-
-    // SAME COUNTRY THIRD
-    addProfiles(sameCountryProfiles);
-
-    // --------------------------------------------------------
-    // If somehow we still don't have 10 profiles,
-    // use remaining profiles rather than returning fewer.
-    // --------------------------------------------------------
-
-    if (selected.length < 10) {
-      addProfiles(scoredProfiles);
-    }
-
-    // --------------------------------------------------------
-    // Return exactly up to 10
-    // --------------------------------------------------------
-
-    const finalProfiles = selected.slice(0, 10).map((profile) => {
-      // Remove internal helper properties before returning.
-      const { _sameCity, _sameState, _sameCountry, ...cleanProfile } = profile;
-
-      return cleanProfile;
-    });
-
-    console.log(
-      "🎯 Poker selected profiles:",
-      finalProfiles.map((p) => ({
-        name: p.display_name,
-        city: p.city,
-        state: p.state,
-        age: p.age,
-        score: Math.round(p.score),
-        reasons: p.matchReasons,
-      })),
-    );
-
-    return finalProfiles;
+    return scored.slice(0, 10).map(({ _band, _bonus, ...rest }) => rest);
   } catch (err) {
     console.error("❌ Error getting Poker fictional profile suggestions:", err);
-
     return [];
   }
 }
@@ -2583,60 +2571,49 @@ async function getSuggestedFictionalProfiles(user) {
 // ============================================================
 // POKER PROFILE SELECTOR
 // ============================================================
-
 async function selectBestFictionalProfile(user) {
   try {
-    // ========================================================
-    // PRIORITY 1:
-    // Profiles the user has already liked
-    // ========================================================
+    const suggestions = await getSuggestedFictionalProfiles(user);
 
-    if (
-      Array.isArray(user.liked_fictional_ids) &&
-      user.liked_fictional_ids.length > 0
-    ) {
-      const { data, error } = await supabase
+    // Likes: message the user from the profile they liked
+    // (most recent like first)
+    const likedIds = Array.isArray(user.liked_fictional_ids)
+      ? user.liked_fictional_ids.filter(Boolean)
+      : [];
+
+    if (likedIds.length) {
+      const { data: liked, error } = await supabase
         .from("fictional_profiles")
         .select("*")
-        .in("id", user.liked_fictional_ids)
+        .in("id", likedIds)
         .eq("is_deleted", false);
 
       if (error) {
         console.error("❌ Error fetching liked fictional profiles:", error);
-      } else if (data?.length) {
-        console.log(`❤️ User has liked ${data.length} fictional profile(s)`);
-
-        // Get normal geographically matched profiles too.
-        const suggestions = await getSuggestedFictionalProfiles(user);
-
-        const likedIds = new Set(data.map((p) => p.id));
-
-        const combined = [...data];
-
-        for (const profile of suggestions) {
-          if (!likedIds.has(profile.id) && combined.length < 10) {
-            combined.push(profile);
-          }
-        }
+      } else if (liked?.length) {
+        const order = (id) => likedIds.lastIndexOf(id);
+        const likedProfiles = liked
+          .sort((a, b) => order(b.id) - order(a.id))
+          .map((p) => ({
+            ...p,
+            isLiked: true,
+            distanceLabel: "Liked by user",
+            matchReasons: ["Liked by user"],
+          }));
+        const likedSet = new Set(likedProfiles.map((p) => p.id));
 
         return {
-          bestProfile: data[0],
-          suggestions: combined.slice(0, 10),
+          bestProfile: likedProfiles[0],
+          suggestions: [
+            ...likedProfiles,
+            ...suggestions.filter((p) => !likedSet.has(p.id)),
+          ].slice(0, 10),
           matchCriteria: "Liked profile",
         };
       }
     }
 
-    // ========================================================
-    // PRIORITY 2:
-    // Geographic + interest + age matching
-    // ========================================================
-
-    const suggestions = await getSuggestedFictionalProfiles(user);
-
     if (!suggestions.length) {
-      console.log("⚠️ No matching fictional profiles found.");
-
       return {
         bestProfile: null,
         suggestions: [],
@@ -2644,30 +2621,13 @@ async function selectBestFictionalProfile(user) {
       };
     }
 
-    // Because getSuggestedFictionalProfiles() already ranked
-    // them, the first one is the strongest match.
-    const bestProfile = suggestions[0];
-
-    console.log(
-      `🎯 Poker best profile: ${bestProfile.display_name || bestProfile.name}`,
-    );
-
-    console.log(`📊 Score: ${Math.round(bestProfile.score || 0)}`);
-
-    console.log(`📍 Location: ${bestProfile.city}, ${bestProfile.state}`);
-
-    console.log(`🧠 Reasons: ${bestProfile.matchReasons?.join(", ") || "N/A"}`);
-
     return {
-      bestProfile,
+      bestProfile: suggestions[0],
       suggestions,
-      matchCriteria:
-        bestProfile.matchReasons?.join(", ") ||
-        "Based on location, interests and age",
+      matchCriteria: suggestions[0].matchReasons.join(", "),
     };
   } catch (err) {
     console.error("❌ selectBestFictionalProfile():", err);
-
     return {
       bestProfile: null,
       suggestions: [],
@@ -2731,6 +2691,7 @@ app.get("/poker/next-user", async (req, res) => {
     if (assigned) {
       // Get selected fictional profile
       const { bestProfile, suggestions } = await selectBestFictionalProfile({
+        user_profile_id: assigned.user_profile_id,
         liked_fictional_ids: assigned.liked_fictional_ids,
         user_interests: assigned.user_interests,
         user_country: assigned.user_country,
@@ -2749,6 +2710,7 @@ app.get("/poker/next-user", async (req, res) => {
           age: assigned.user_age,
           country: assigned.user_country,
           city: assigned.user_city,
+          state: assigned.user_state,
           interests: assigned.user_interests,
           liked_fictional_ids: assigned.liked_fictional_ids,
           liked_fictional_names: assigned.liked_fictional_names,
@@ -2776,6 +2738,7 @@ app.get("/poker/next-user", async (req, res) => {
 
     // Select best fictional profile for this user
     const { bestProfile, suggestions } = await selectBestFictionalProfile({
+      user_profile_id: pending.user_profile_id,
       liked_fictional_ids: pending.liked_fictional_ids,
       user_interests: pending.user_interests,
       user_country: pending.user_country,
@@ -2793,7 +2756,7 @@ app.get("/poker/next-user", async (req, res) => {
 
     // Assign user to this poker with 5-minute lock
     const expiresAt = new Date();
-    expiresAt.setMinutes(expiresAt.getMinutes() + 5);
+    expiresAt.setMinutes(expiresAt.getMinutes() + 10); // pokers get 10 minutes
 
     const { data: updated, error: updateError } = await supabase
       .from("poke_queue")
@@ -2820,6 +2783,7 @@ app.get("/poker/next-user", async (req, res) => {
         age: updated.user_age,
         country: updated.user_country,
         city: updated.user_city,
+        state: updated.user_state,
         interests: updated.user_interests,
         liked_fictional_ids: updated.liked_fictional_ids,
         liked_fictional_names: updated.liked_fictional_names,
