@@ -38,7 +38,6 @@ if (CORS_ORIGINS.length === 0) {
 app.use(
   cors({
     origin: CORS_ORIGINS.length === 0 ? true : CORS_ORIGINS,
-    allowedHeaders: ["Content-Type", "Authorization", "x-cron-secret"],
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   }),
 );
