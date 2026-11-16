@@ -702,7 +702,9 @@ app.get("/stopped/next-conversation", async (req, res) => {
 
 app.post("/operator/login", loginLimiter, async (req, res) => {
   try {
-    const { username, password } = req.body;
+    // Phones often add a trailing space or autofill whitespace
+    const username = String(req.body?.username || "").trim();
+    const { password } = req.body || {};
 
     if (!username || !password) {
       return res.status(400).json({ error: "Missing credentials" });
@@ -764,6 +766,27 @@ app.post("/operator/login", loginLimiter, async (req, res) => {
     });
   } catch (err) {
     console.error("Operator login error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Logging out frees this device's hold on conversations, so the same
+// operator can carry on from another device straight away.
+app.post("/operator/release-device", async (req, res) => {
+  try {
+    const deviceId = req.body?.device_id;
+    if (!deviceId) return res.status(400).json({ error: "device_id required" });
+
+    const { error } = await supabase
+      .from("conversations")
+      .update({ active_operator_device: null })
+      .eq("active_operator_id", req.operator.id)
+      .eq("active_operator_device", deviceId);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Release device error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1351,7 +1374,7 @@ app.post("/operator/assign-next", async (req, res) => {
         .eq("status", "pending");
 
       // Get all unread messages for this conversation
-      const { data: messages } = await supabase
+      const { data: messages, error: messagesError } = await supabase
         .from("messages")
         .select("*")
         .eq("conversation_id", selectedMessage.conversation_id)
