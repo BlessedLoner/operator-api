@@ -75,10 +75,13 @@ const {
 } = createAuth(supabase);
 
 // Columns that are safe to send to the manager app (NEVER password_hash)
-const OPERATOR_SAFE_COLUMNS =
-  "id, username, email, full_name, role, operator_type, is_active, is_blocked, blocked_at, created_at, last_login, last_seen_at";
-const MANAGER_SAFE_COLUMNS =
-  "id, user_id, username, email, full_name, role, is_active, created_at";
+// Never send password hashes to any client (columns are fetched with *
+// so a missing optional column can never break a page).
+const withoutSecrets = (row) => {
+  if (!row || typeof row !== "object") return row;
+  const { password_hash, password, ...rest } = row;
+  return rest;
+};
 const MANAGER_ROLES = ["admin", "manager", "viewer"];
 
 // Login brute-force protection: 10 attempts per 15 min per IP + username
@@ -4104,7 +4107,7 @@ app.get("/manager/operators", managerOrAdmin, async (req, res) => {
 
     let query = supabase
       .from("operator_accounts")
-      .select(OPERATOR_SAFE_COLUMNS, { count: "exact" });
+      .select("*", { count: "exact" });
 
     // Apply search filter (escaped - see orFilterLike)
     const term = orFilterLike(search);
@@ -4128,7 +4131,7 @@ app.get("/manager/operators", managerOrAdmin, async (req, res) => {
     if (error) throw error;
 
     res.json({
-      operators: operators || [],
+      operators: (operators || []).map(withoutSecrets),
       total: count || 0,
       page,
       totalPages: Math.ceil((count || 0) / limit),
@@ -4175,7 +4178,7 @@ app.post("/manager/operators", managerOrAdmin, async (req, res) => {
         is_active: true,
         created_at: new Date().toISOString(),
       })
-      .select(OPERATOR_SAFE_COLUMNS)
+      .select()
       .single();
 
     if (error) {
@@ -4183,7 +4186,7 @@ app.post("/manager/operators", managerOrAdmin, async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
 
-    res.json({ success: true, operator });
+    res.json({ success: true, operator: withoutSecrets(operator) });
   } catch (err) {
     console.error("Create operator error:", err);
     res.status(500).json({ error: err.message });
@@ -4466,12 +4469,12 @@ app.put("/manager/operators/:id", managerOrAdmin, async (req, res) => {
       .from("operator_accounts")
       .update(updateData)
       .eq("id", id)
-      .select(OPERATOR_SAFE_COLUMNS)
+      .select()
       .single();
 
     if (error) throw error;
 
-    res.json({ success: true, operator: data });
+    res.json({ success: true, operator: withoutSecrets(data) });
   } catch (err) {
     console.error("Update operator error:", err);
     res.status(500).json({ error: err.message });
@@ -4629,7 +4632,7 @@ app.get("/manager/managers", adminOnly, async (req, res) => {
     // ✅ Define query first (never select password columns)
     let query = supabase
       .from("managers")
-      .select(MANAGER_SAFE_COLUMNS, { count: "exact" });
+      .select("*", { count: "exact" });
 
     // ✅ Apply escaped search filter if search term exists
     const term = orFilterLike(search);
@@ -4648,7 +4651,7 @@ app.get("/manager/managers", adminOnly, async (req, res) => {
     if (error) throw error;
 
     res.json({
-      managers: managers || [],
+      managers: (managers || []).map(withoutSecrets),
       total: count || 0,
       page,
       totalPages: Math.ceil((count || 0) / limit),
@@ -4721,7 +4724,7 @@ app.post("/manager/managers", adminOnly, async (req, res) => {
         is_active: true,
         created_at: new Date().toISOString(),
       })
-      .select(MANAGER_SAFE_COLUMNS)
+      .select()
       .single();
 
     if (error) {
@@ -4731,7 +4734,7 @@ app.post("/manager/managers", adminOnly, async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
 
-    res.json({ success: true, manager });
+    res.json({ success: true, manager: withoutSecrets(manager) });
   } catch (err) {
     console.error("Create manager error:", err);
     res.status(500).json({ error: err.message });
@@ -4788,12 +4791,12 @@ app.put("/manager/managers/:id", adminOnly, async (req, res) => {
       .from("managers")
       .update(updateData)
       .eq("id", id)
-      .select(MANAGER_SAFE_COLUMNS)
+      .select()
       .single();
 
     if (error) throw error;
 
-    res.json({ success: true, manager: data });
+    res.json({ success: true, manager: withoutSecrets(data) });
   } catch (err) {
     console.error("Update manager error:", err);
     res.status(500).json({ error: err.message });
