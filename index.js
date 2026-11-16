@@ -4,6 +4,7 @@ import bcrypt from "bcrypt";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 import paymentsRouter from "./src/routes/payments.js";
+import { createPaystackRouter } from "./src/routes/paystack.js";
 import { createAuth, rateLimit, orFilterLike } from "./src/auth.js";
 import { sendNewMessageEmail } from "./src/services/emailService.js";
 // ✅ Add this:
@@ -44,6 +45,11 @@ app.use(
 
 // ✅ Stripe webhook MUST use raw body BEFORE json parser
 app.use("/payments/webhook", express.raw({ type: "application/json" }));
+// ✅ Paystack signs the raw body too (HMAC-SHA512), so keep it raw
+app.use(
+  "/payments/paystack/webhook",
+  express.raw({ type: "application/json" }),
+);
 
 app.use(express.json());
 
@@ -72,6 +78,8 @@ const {
   requireManager,
   requireRole,
   requireSiteAdmin,
+  verifySupabaseUser,
+  getBearerToken,
 } = createAuth(supabase);
 
 // Columns that are safe to send to the manager app (NEVER password_hash)
@@ -6040,6 +6048,24 @@ app.delete("/admin/states/:id", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ==========================
+// PAYSTACK ROUTES (credit purchases)
+// ==========================
+app.use(
+  "/payments/paystack",
+  createPaystackRouter({
+    supabase,
+    verifySupabaseUser,
+    getBearerToken,
+    // 20 checkout starts per 10 minutes per IP
+    initializeLimiter: rateLimit({
+      windowMs: 10 * 60 * 1000,
+      max: 20,
+      key: (req) => `paystack-init|${req.ip}`,
+    }),
+  }),
+);
 
 // ==========================
 // STRIPE ROUTES
